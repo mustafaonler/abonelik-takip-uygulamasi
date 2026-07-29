@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OAuth Callback Sayfası — app/auth/callback.tsx → URL: /auth/callback
+// OAuth / Magic-Link Callback — /auth/callback
 //
-// PKCE flow (flowType: 'pkce'): ?code=XXX → exchangeCodeForSession
-// Implicit fallback:           #access_token=XXX → setSession
+// Expo Router web'de supabase-js URL'yi göremez (Expo Router önce yakalar).
+// Bu yüzden:
+//   1) useLocalSearchParams → ?code= parametresini yakala
+//   2) exchangeCodeForSession(code) → PKCE exchange → session oluştur → /(tabs)
+//   3) Fallback: code yoksa getSession() + onAuthStateChange (sayfa yenileme vb.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function syncUserToDatabase(session: Session): Promise<void> {
@@ -16,7 +19,6 @@ async function syncUserToDatabase(session: Session): Promise<void> {
   if (!user) return;
 
   const meta = user.user_metadata ?? {};
-  console.log('[Callback] syncUser user:', user.email, '| meta keys:', Object.keys(meta).join(', '));
 
   const { error } = await supabase.from('users').upsert(
     {
@@ -29,116 +31,140 @@ async function syncUserToDatabase(session: Session): Promise<void> {
   );
 
   if (error) {
-    console.error('[Callback] syncUser hata:', error.message, '| code:', error.code);
+    console.error('[Callback] DB upsert hatası:', error.message);
   } else {
-    console.log('[Callback] ✅ public.users kaydedildi →', user.email);
+    console.log('[Callback] ✅ Kullanıcı kaydedildi:', user.email);
   }
 }
 
 export default function AuthCallback() {
-  const [status, setStatus] = useState('Oturum açılıyor...');
+  const [status, setStatus] = useState('Kimlik doğrulanıyor...');
+
+  // ── Adım 1: Expo Router hook'u ile URL'deki ?code= parametresini yakala ──────
+  // Bu, window.location.search yerine Expo Router'ın kendi routing sistemini kullanır.
+  const { code } = useLocalSearchParams<{ code?: string }>();
 
   useEffect(() => {
-    const handleCallback = async () => {
-      try {
-        const currentUrl = window.location.href;
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('[Callback] Sayfa URL\'i:', currentUrl);
+    // ── Teşhis logları ─────────────────────────────────────────────────────────
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('[Callback] Callback anında Key:',
+      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
+        ? `✅ MEVCUT (${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY.length} karakter)`
+        : '❌ UNDEFINED',
+    );
+    console.log('[Callback] Callback URL:',
+      typeof window !== 'undefined' ? window.location.href : '(native)',
+    );
+    console.log('[Callback] useLocalSearchParams code:',
+      code ? `✅ MEVCUT (${String(code).length} karakter)` : '❌ YOK',
+    );
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-        const url = new URL(currentUrl);
+    // ── OAuth / Supabase sunucu hatası kontrolü ────────────────────────────────
+    try {
+      const url = new URL(window.location.href);
+      const oauthError = url.searchParams.get('error') || url.searchParams.get('error_code');
+      if (oauthError) {
+        const desc = url.searchParams.get('error_description') ?? '';
+        console.error('[Callback] ❌ OAuth sunucu hatası:', oauthError, '-', desc);
+        router.replace('/(auth)/login');
+        return;
+      }
+    } catch (_) { /* native ortam */ }
 
-        // ── 0) OAuth / Supabase Sunucu Hatası ────────────────────────────────
-        const oauthError     = url.searchParams.get('error') || url.searchParams.get('error_code');
-        const oauthErrorDesc = url.searchParams.get('error_description');
-        if (oauthError) {
-          console.error('[Callback] ❌ OAuth sunucu hatası:', oauthError, '-', oauthErrorDesc);
-          router.replace('/(auth)/login');
-          return;
-        }
+    let navigated = false;
 
-        // ── 1) PKCE Flow: ?code=... (flowType: 'pkce' ile gelen) ─────────────
-        const code = url.searchParams.get('code');
-        if (code) {
-          console.log('[Callback] PKCE ?code bulundu, exchangeCodeForSession çağrılıyor...');
-          setStatus('Kimlik doğrulanıyor...');
+    const goToApp = async (session: Session) => {
+      if (navigated) return;
+      navigated = true;
+      setStatus('Hesap kaydediliyor...');
+      await syncUserToDatabase(session);
+      console.log('[Callback] ✅ Yönlendiriliyor → /(tabs)');
+      router.replace('/(tabs)');
+    };
 
-          const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    const run = async () => {
+
+      // ── Adım 2: PKCE Code Exchange (asıl yol) ─────────────────────────────────
+      // URL'de ?code= varsa → exchangeCodeForSession ile oturuma çevir.
+      if (code) {
+        console.log('[Callback] PKCE ?code bulundu, exchange başlıyor...');
+        setStatus('Kimlik doğrulanıyor...');
+
+        try {
+          const { data, error } = await supabase.auth.exchangeCodeForSession(String(code));
 
           console.log('[Callback] exchangeCodeForSession sonucu:', {
             hasSession: !!data?.session,
             userEmail:  data?.session?.user?.email ?? null,
-            error:      error ? { msg: error.message, status: (error as any).status } : null,
+            error: error
+              ? { msg: error.message, status: (error as any).status, code: (error as any).code }
+              : null,
           });
 
           if (error) {
-            console.error('[Callback] ❌ exchangeCodeForSession hatası:', error.message);
+            console.error('[Callback] ❌ exchangeCodeForSession hatası:',
+              error.message,
+              '| status:', (error as any).status,
+              '| code:', (error as any).code,
+            );
             router.replace('/(auth)/login');
             return;
           }
-          if (data.session) {
-            setStatus('Hesap kaydediliyor...');
-            await syncUserToDatabase(data.session);
-            console.log('[Callback] ✅ PKCE akışı başarılı! /(tabs) yönlendiriliyor.');
-            router.replace('/(tabs)');
+
+          if (data?.session) {
+            await goToApp(data.session);
             return;
           }
+
+          // Exchange başarılı ama session gelmedi — beklenmedik durum
+          console.warn('[Callback] Exchange tamam ama session yok, getSession deneniyor...');
+        } catch (err: any) {
+          console.error('[Callback] ❌ exchangeCodeForSession beklenmeyen hata:', err?.message ?? err);
+          router.replace('/(auth)/login');
+          return;
+        }
+      }
+
+      // ── Adım 3: Fallback — code yoksa mevcut session kontrol et ───────────────
+      // (Sayfa yenileme, zaten giriş yapmış kullanıcı, magic-link hash akışı)
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+
+        if (error) {
+          console.error('[Callback] ❌ getSession hatası:',
+            error.message, '| status:', (error as any).status);
+          if (!navigated) router.replace('/(auth)/login');
+          return;
         }
 
-        // ── 2) Implicit Flow Fallback: #access_token=... ─────────────────────
-        const rawHash   = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
-        const hashParams = new URLSearchParams(rawHash);
-        const accessToken  = hashParams.get('access_token');
-        const refreshToken = hashParams.get('refresh_token');
+        console.log('[Callback] getSession:',
+          session ? `✅ ${session.user.email}` : 'session yok, onAuthStateChange bekleniyor...');
 
-        console.log('[Callback] access_token var mı :', !!accessToken);
-        console.log('[Callback] refresh_token var mı:', !!refreshToken);
-
-        if (accessToken) {
-          // Diagnostic: token tipini doğrula
-          console.log('[Callback] access_token[0:20]:', accessToken.slice(0, 20));
-          console.log('[Callback] access_token uzun.:', accessToken.length);
-          console.log('[Callback] JWT formatı mı?   :', accessToken.startsWith('eyJ') ? '✅ EVET' : '❌ HAYIR');
-
-          console.log('[Callback] setSession çağrılıyor...');
-          setStatus('Oturum oluşturuluyor...');
-
-          const { data, error } = await supabase.auth.setSession({
-            access_token:  accessToken,
-            refresh_token: refreshToken ?? '',
-          });
-
-          console.log('[Callback] setSession sonucu:', {
-            hasSession: !!data?.session,
-            userEmail:  data?.session?.user?.email ?? null,
-            error:      error ? { msg: error.message, status: (error as any).status, code: (error as any).code } : null,
-          });
-
-          if (error) {
-            console.error('[Callback] ❌ setSession hatası:', error.message, '| status:', (error as any).status);
-            router.replace('/(auth)/login');
-            return;
-          }
-          if (data.session) {
-            setStatus('Hesap kaydediliyor...');
-            await syncUserToDatabase(data.session);
-            console.log('[Callback] ✅ Implicit akışı başarılı! /(tabs) yönlendiriliyor.');
-            router.replace('/(tabs)');
-            return;
-          }
+        if (session) {
+          await goToApp(session);
         }
-
-        // ── 3) Ne code ne token var ───────────────────────────────────────────
-        console.error('[Callback] ❌ URL\'de ne ?code ne de #access_token var:', currentUrl);
-        router.replace('/(auth)/login');
-
       } catch (err: any) {
-        console.error('[Callback] ❌ Beklenmeyen hata:', err?.message ?? err);
-        router.replace('/(auth)/login');
+        console.error('[Callback] ❌ getSession beklenmeyen hata:', err?.message ?? err);
+        if (!navigated) router.replace('/(auth)/login');
       }
     };
 
-    handleCallback();
-  }, []);
+    // ── Adım 3 devam: onAuthStateChange — son güvence ─────────────────────────
+    // getSession boş dönerse ve SIGNED_IN event'i gelirse yakalıyoruz.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log('[Callback] Auth event:', event, '|', session?.user?.email ?? 'session yok');
+        if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+          await goToApp(session);
+        }
+      },
+    );
+
+    run();
+
+    return () => subscription.unsubscribe();
+  }, [code]);
 
   return (
     <View style={styles.container}>

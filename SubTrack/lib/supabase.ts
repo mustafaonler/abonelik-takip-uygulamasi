@@ -1,38 +1,34 @@
 import { createClient } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 
-// ── 1) Ham değerleri oku + gizli karakterleri temizle ──────────────────────────
-// \r (Windows CRLF), \n, \t, boşluk — bunlardan herhangi biri apikey'e girerse 401 alırsın.
-const supabaseUrl  = (process.env.EXPO_PUBLIC_SUPABASE_URL  ?? '').trim().replace(/[\r\n\t]/g, '');
-const rawAnonKey   = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '').trim().replace(/[\r\n\t]/g, '');
+// ── Env değerlerini oku ─────────────────────────────────────────────────────
+console.log("URL Okunuyor mu?:", !!process.env.EXPO_PUBLIC_SUPABASE_URL);
+console.log("KEY Okunuyor mu?:", !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
+console.log("KEY Uzunluğu:", process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.length);
 
-if (!supabaseUrl || !rawAnonKey) {
+// \r (Windows CRLF), \n, \t — bunlar apikey'e girerse 401 alırsın.
+const supabaseUrl  = (process.env.EXPO_PUBLIC_SUPABASE_URL  ?? '').trim().replace(/[\r\n\t]/g, '');
+const supabaseAnonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '').trim().replace(/[\r\n\t]/g, '');
+
+if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error(
     'Missing Supabase env vars. ' +
-    'EXPO_PUBLIC_SUPABASE_URL ve EXPO_PUBLIC_SUPABASE_ANON_KEY .env dosyasında tanımlı olmalı.'
+    'EXPO_PUBLIC_SUPABASE_URL ve EXPO_PUBLIC_SUPABASE_ANON_KEY .env dosyasında tanımlı olmalı.',
   );
 }
 
-// ── 2) sb_publishable_ prefix'ini otomatik kırp ───────────────────────────────
-// Supabase dashboard'u yeni projeler için anahtarı şu formatta gösteriyor:
-//   sb_publishable_XXXXX.eyJpc3MiOiJ...
-// REST API sunucusu apikey header'ında sadece JWT kısmını (eyJ...) kabul eder.
-// .env'de tam anahtarı tutabilirsin; kod otomatik ayarlıyor.
-const supabaseAnonKey = rawAnonKey.startsWith('sb_publishable_')
-  ? rawAnonKey.split('.').slice(1).join('.')
-  : rawAnonKey;
-
-// ── 3) Runtime doğrulama — her başlatmada konsolda kontrol et ─────────────────
+// ── Runtime doğrulama ───────────────────────────────────────────────────────
+// NOT: supabase-js v2.49+ sb_publishable_ formatını doğrudan kabul eder.
+// Prefix kırpmak YAPMA — sunucu tam anahtarı bekler.
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('[Supabase] URL           :', supabaseUrl);
-console.log('[Supabase] Raw key uzun. :', rawAnonKey.length, 'karakter');
-console.log('[Supabase] JWT key uzun. :', supabaseAnonKey.length, 'karakter');
-console.log('[Supabase] JWT[0:15]     :', JSON.stringify(supabaseAnonKey.slice(0, 15)));
-console.log('[Supabase] JWT[-8:]      :', JSON.stringify(supabaseAnonKey.slice(-8)));
-console.log('[Supabase] JWT eyJ mi?   :', supabaseAnonKey.startsWith('eyJ') ? '✅ EVET' : '❌ HAYIR — SORUN VAR!');
+console.log('[Supabase] URL              :', supabaseUrl);
+console.log('[Supabase] KEY uzunluğu     :', supabaseAnonKey.length, 'karakter');
+console.log('[Supabase] KEY[0:20]        :', JSON.stringify(supabaseAnonKey.slice(0, 20)));
+console.log('[Supabase] KEY[-8:]         :', JSON.stringify(supabaseAnonKey.slice(-8)));
+console.log('[Supabase] sb_publishable_? :', supabaseAnonKey.startsWith('sb_publishable_') ? '✅ EVET (tam format)' : supabaseAnonKey.startsWith('eyJ') ? '✅ JWT format' : '❌ BİLİNMEYEN FORMAT');
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-// ── AsyncStorage (yalnızca native) ────────────────────────────────────────────
+// ── AsyncStorage (yalnızca native) ─────────────────────────────────────────
 const getStorage = () => {
   if (Platform.OS !== 'web') {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -42,13 +38,15 @@ const getStorage = () => {
   return undefined; // web: Supabase kendi localStorage adapter'ını kullanır
 };
 
+// ── createClient — parametre sırası: 1=URL, 2=KEY(tam), 3=options ──────────
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: getStorage(),
     autoRefreshToken: true,
     persistSession: true,
-    // PKCE flow — OAuth callback'i ?code= ile gelir, exchangeCodeForSession kullanılır.
-    // detectSessionInUrl kapalı: URL'i callback.tsx manuel işliyor.
+    // PKCE flow — OAuth ve magic-link callback'i ?code= ile gelir.
+    // detectSessionInUrl: false → Expo Router URL'i supabase-js'den önce yakalar,
+    // code exchange'i callback.tsx içinde manuel yapıyoruz.
     flowType: 'pkce',
     detectSessionInUrl: false,
   },

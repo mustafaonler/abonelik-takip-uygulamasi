@@ -55,8 +55,9 @@ export default function RootLayout() {
       async (event, session) => {
         console.log('[Auth] event:', event, '| session:', session?.user?.email ?? 'yok');
 
-        if (event === 'INITIAL_SESSION' && session) {
-          // Dönen kullanıcı — oturum localStorage'dan yüklendi
+        if (event === 'INITIAL_SESSION' && session && !isOnCallbackPage) {
+          // Dönen kullanıcı — oturum localStorage'dan yüklendi.
+          // Callback sayfasındaysak yönlendirme YAPMA; callback.tsx hallediyor.
           await syncUserToDatabase(session);
           router.replace('/(tabs)');
         } else if (event === 'INITIAL_SESSION' && !session && !isOnCallbackPage) {
