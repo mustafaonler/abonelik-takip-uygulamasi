@@ -30,6 +30,10 @@ export default function TabsLayout() {
         name="index"
         options={{ title: 'Aboneliklerim', tabBarLabel: 'Ana Sayfa' }}
       />
+      <Tabs.Screen
+        name="add"
+        options={{ title: 'Yeni Ekle', tabBarLabel: 'Ekle' }}
+      />
     </Tabs>
   );
 }
