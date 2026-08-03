@@ -4,10 +4,27 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
 import { COLORS, RADIUS } from '../../lib/theme';
 
-// Sekme çubuğu yüksekliği = içerik + cihazın alt güvenli alanı.
-// Sabit yükseklik verirsek gestür çubuğu olan telefonlarda ikonlar çubuğun
-// altında kalıyor; insets.bottom'u ekleyip aynı miktarda iç boşluk veriyoruz.
-const TAB_CONTENT_HEIGHT = 68;
+// ═══════════════════════════════════════════════════════════════════════════
+// Sekme çubuğu yüksekliği
+//
+// Toplam yükseklik = içerik + cihazın alt güvenli alanı (gestür çubuğu).
+// Aynı miktar paddingBottom olarak da veriliyor, yoksa içerik güvenli alanın
+// altına iniyor.
+//
+// İçerik bütçesi (TAB_CONTENT_HEIGHT = 78):
+//   paddingTop        10
+//   ikon hapı         34
+//   etiket boşluğu     2
+//   etiket satırı     16
+//   ─────────────────────
+//   toplam            62   → 16px pay kalıyor
+//
+// Önceki değer 68'di ve bütçe 66 kullanıyordu; 2px pay, sistem yazı tipi
+// büyütülünce etiketi çubuğun dışına taşırıyordu. Etiketi ayrıca
+// allowFontScaling={false} ile sabitledik — erişilebilirlik ayarı 2 katına
+// çıktığında tek satırlık etiketin taşmaması, okunmaması riskinden iyi.
+// ═══════════════════════════════════════════════════════════════════════════
+const TAB_CONTENT_HEIGHT = 78;
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
@@ -32,13 +49,14 @@ export default function TabsLayout() {
           borderTopWidth: 1,
           height: TAB_CONTENT_HEIGHT + insets.bottom,
           paddingBottom: insets.bottom,
-          paddingTop: 8,
+          paddingTop: 10,
         },
-        tabBarItemStyle: { paddingVertical: 4 },
-        tabBarLabelStyle: { fontSize: 12.5, fontWeight: '700', marginTop: 4 },
-        // Pasif ton COLORS.dim'den muted'a çekildi: dim koyu zeminde neredeyse
-        // arka planla aynı, sekmenin var olduğu bile fark edilmiyordu.
+        // Öğenin kendi dikey boşluğu yok: tüm dikey ölçü tabBarStyle'dan
+        // yönetiliyor ki bütçe tek yerde kalsın.
+        tabBarItemStyle: { paddingVertical: 0 },
         tabBarActiveTintColor: COLORS.primaryLight,
+        // Pasif ton dim → muted: dim koyu zeminde arka planla neredeyse aynı,
+        // sekmenin var olduğu bile zor fark ediliyordu.
         tabBarInactiveTintColor: COLORS.muted,
 
         headerRight: () => (
@@ -52,22 +70,22 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Aboneliklerim',
-          tabBarLabel: 'Ana Sayfa',
           // İkon kütüphanesi kurulu değil; uygulama zaten kategorilerde emoji
           // kullanıyor, aynı dili sürdürüyoruz (ek bağımlılık ve font yükü yok).
           tabBarIcon: ({ color, focused }) => (
             <TabIcon glyph="◉" color={color} focused={focused} />
           ),
+          tabBarLabel: ({ color }) => <TabLabel text="Ana Sayfa" color={color} />,
         }}
       />
       <Tabs.Screen
         name="add"
         options={{
           title: 'Yeni Ekle',
-          tabBarLabel: 'Ekle',
           tabBarIcon: ({ color, focused }) => (
             <TabIcon glyph="＋" color={color} focused={focused} />
           ),
+          tabBarLabel: ({ color }) => <TabLabel text="Ekle" color={color} />,
         }}
       />
     </Tabs>
@@ -87,8 +105,18 @@ function TabIcon({
 }) {
   return (
     <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
-      <Text style={[styles.tabIcon, { color }]}>{glyph}</Text>
+      <Text style={[styles.tabIcon, { color }]} allowFontScaling={false}>
+        {glyph}
+      </Text>
     </View>
+  );
+}
+
+function TabLabel({ text, color }: { text: string; color: ColorValue }) {
+  return (
+    <Text style={[styles.tabLabel, { color }]} allowFontScaling={false} numberOfLines={1}>
+      {text}
+    </Text>
   );
 }
 
@@ -97,12 +125,20 @@ const styles = StyleSheet.create({
   signOutText: { color: COLORS.primaryLight, fontWeight: '600', fontSize: 14 },
 
   tabIconWrap: {
-    minWidth: 52,
-    height: 30,
+    minWidth: 60,
+    height: 34,
     borderRadius: RADIUS.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
   tabIconWrapActive: { backgroundColor: COLORS.primarySoft },
   tabIcon: { fontSize: 24, lineHeight: 28, textAlign: 'center' },
+
+  tabLabel: {
+    fontSize: 12.5,
+    lineHeight: 16,
+    fontWeight: '700',
+    marginTop: 2,
+    textAlign: 'center',
+  },
 });

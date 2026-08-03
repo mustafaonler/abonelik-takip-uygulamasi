@@ -14,6 +14,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
 import { useDashboard } from '../../hooks/useDashboard';
 import { Badge, BadgeRow } from '../../components/ui';
+import { CategoryPie } from '../../components/CategoryPie';
 import { COLORS, TONES, type Tone } from '../../lib/theme';
 import {
   formatCurrency,
@@ -27,6 +28,10 @@ import type { SubscriptionEnriched } from '../../types';
 const { width } = Dimensions.get('window');
 
 const ADD_ROUTE = '/(tabs)/add';
+
+// Grafik genişliği = ekran − liste kenar boşluğu (2×20) − kart iç boşluğu (2×20).
+// Geniş ekranlarda (web) sınırlandırılıyor; yoksa pasta gereksiz büyüyor.
+const chartWidth = Math.min(width - 80, 420);
 
 /** Ödeme tarihine kalan güne göre vurgu rengi. */
 function paymentTone(days: number): string {
@@ -67,6 +72,7 @@ export default function DashboardScreen() {
     otherCurrencies,
     nextPayment,
     endingContracts,
+    categoryBreakdown,
     refetch,
   } = useDashboard();
 
@@ -161,6 +167,15 @@ export default function DashboardScreen() {
               nextPaymentName={nextPayment?.subscription.name ?? null}
               nextPaymentDate={nextPayment ? formatDate(nextPayment.date) : null}
             />
+
+            {/* Dağılım tek kategoriden ibaretse pasta bilgi taşımıyor —
+                dolu bir daire çizmek yerine hiç göstermiyoruz. */}
+            {categoryBreakdown.length > 1 && (
+              <View style={styles.breakdownCard}>
+                <Text style={styles.breakdownTitle}>Kategori Dağılımı</Text>
+                <CategoryPie slices={categoryBreakdown} width={chartWidth} />
+              </View>
+            )}
 
             {endingContracts.length > 0 && (
               <AlertBanner
@@ -454,6 +469,26 @@ const styles = StyleSheet.create({
 
   listContent: { padding: 20, paddingBottom: 40 },
   cardGap: { height: 12 },
+
+  // ── Kategori dağılımı ──
+  breakdownCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 20,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  breakdownTitle: {
+    alignSelf: 'flex-start',
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primaryLight,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
 
   // ── Özet kartı ──
   summaryCard: {

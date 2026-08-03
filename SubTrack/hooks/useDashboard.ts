@@ -31,6 +31,27 @@ export interface NextPayment {
   daysUntil: number;
 }
 
+/** Pasta grafiği için kategori başına aylık TRY harcaması. */
+export interface CategorySlice {
+  /** category_id, kategorisizler için sabit anahtar. */
+  key: string;
+  name: string;
+  icon: string | null;
+  color: string;
+  /** Aylığa normalize edilmiş TRY tutarı. */
+  amount: number;
+  /** 0–100 arası pay. */
+  pct: number;
+}
+
+/** Rengi olmayan kategoriler için yedek palet — mor/lila ekseninde. */
+const FALLBACK_COLORS = [
+  '#a78bfa', '#7c3aed', '#c084fc', '#f59e0b',
+  '#ec4899', '#0ea5e9', '#14b8a6', '#94a3b8',
+];
+
+const UNCATEGORIZED_KEY = '__none__';
+
 export interface UseDashboardResult {
   /** Yalnızca ilk yükleme. Pull-to-refresh sırasında false kalır. */
   loading: boolean;
@@ -61,6 +82,14 @@ export interface UseDashboardResult {
   upcomingPayments: SubscriptionEnriched[];
   /** 60 gün içinde taahhüdü bitenler. */
   endingContracts: SubscriptionEnriched[];
+
+  /**
+   * Kategori bazında aylık harcama dağılımı, büyükten küçüğe.
+   * Yalnızca TRY — üstündeki özet kartı da TRY gösteriyor ve şema boyunca
+   * kur çevrimi bilinçli olarak yapılmıyor. Farklı para birimlerini tek
+   * pastada toplamak sessizce yanlış bir dağılım çizerdi.
+   */
+  categoryBreakdown: CategorySlice[];
 
   /** Pull-to-refresh ve hata sonrası "Tekrar Dene" için. */
   refetch: () => Promise<void>;
@@ -183,6 +212,48 @@ export function useDashboard(): UseDashboardResult {
       s.contract_days_left <= CONTRACT_ENDING_WINDOW_DAYS,
   );
 
+  // ── Kategori dağılımı ────────────────────────────────────────────────────
+  const categoryBreakdown = ((): CategorySlice[] => {
+    const buckets = new Map<string, CategorySlice>();
+
+    for (const s of subscriptions) {
+      // TRY dışını dışarıda bırak — bkz. categoryBreakdown açıklaması.
+      if (s.currency !== 'TRY') continue;
+
+      const amount = Number(s.monthly_amount ?? 0);
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+
+      const key = s.category_id ?? UNCATEGORIZED_KEY;
+      const existing = buckets.get(key);
+
+      if (existing) {
+        existing.amount += amount;
+      } else {
+        buckets.set(key, {
+          key,
+          name: s.category_name ?? 'Kategorisiz',
+          icon: s.category_icon ?? null,
+          // Kategorinin kendi rengi kartlardaki ikon rengiyle aynı; pasta
+          // dilimi ile altındaki kart görsel olarak eşleşsin diye onu kullanıyoruz.
+          color: s.category_color ?? FALLBACK_COLORS[buckets.size % FALLBACK_COLORS.length],
+          amount,
+          pct: 0,
+        });
+      }
+    }
+
+    const slices = [...buckets.values()].sort((a, b) => b.amount - a.amount);
+    const total = slices.reduce((sum, slice) => sum + slice.amount, 0);
+
+    if (total <= 0) return [];
+
+    for (const slice of slices) {
+      slice.pct = (slice.amount / total) * 100;
+    }
+
+    return slices;
+  })();
+
   return {
     loading,
     refreshing,
@@ -196,6 +267,7 @@ export function useDashboard(): UseDashboardResult {
     nextPayment,
     upcomingPayments,
     endingContracts,
+    categoryBreakdown,
     refetch,
   };
 }
