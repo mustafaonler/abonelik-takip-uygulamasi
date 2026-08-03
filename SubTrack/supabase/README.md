@@ -10,7 +10,7 @@ kalabilesiniz.
 |---|-------|--------|
 | 1 | `migrations/20260730120000_scope2_core_schema.sql` | Enum'lar, 5 tablo, index, trigger, fonksiyon, view |
 | 2 | `migrations/20260730120100_scope2_rls_policies.sql` | RLS + politikalar |
-| 3 | `migrations/20260730120200_scope2_seed_catalog.sql` | Kategoriler + hazır hizmet şablonları |
+| 3 | `migrations/20260730120200_scope2_seed_catalog.sql` | 10 kategori + 46 hazır hizmet şablonu |
 | 4 | `migrations/20260730120300_users_rls_optional.sql` | ⚠️ `public.users` RLS — **önce dosyanın başındaki notu okuyun** |
 
 1–3 idempotenttir, tekrar çalıştırılabilir. 4. dosya auth akışına dokunan tek
@@ -118,7 +118,7 @@ select relname, relrowsecurity from pg_class where relnamespace = 'public'::regn
 select tablename, policyname, cmd from pg_policies where schemaname = 'public' order by tablename, cmd;
 ```
 
-**3. Seed geldi mi?** 10 kategori + 45 şablon:
+**3. Seed geldi mi?** 10 kategori + 46 şablon:
 
 ```sql
 select (select count(*) from public.categories where user_id is null) as kategori, (select count(*) from public.service_templates) as sablon;
