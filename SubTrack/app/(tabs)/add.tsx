@@ -31,9 +31,7 @@ export default function TemplatePickerScreen() {
   const [categoryId, setCategoryId] = useState<string | null>(null);
 
   function openForm(template: ServiceTemplate | null) {
-    router.push(
-      template ? `/add/form?templateId=${template.id}` : '/add/form',
-    );
+    router.push(template ? `/form?templateId=${template.id}` : '/form');
   }
 
   const filtered = useMemo(() => {

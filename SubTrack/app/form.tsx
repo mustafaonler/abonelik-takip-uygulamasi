@@ -8,16 +8,15 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Switch,
-  Alert,
   Platform,
   KeyboardAvoidingView,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { router, useLocalSearchParams } from 'expo-router';
-import { supabase } from '../../lib/supabase';
-import { toErrorMessage } from '../../lib/errors';
-import { COLORS, RADIUS } from '../../lib/theme';
-import { Badge, BadgeRow, Chip, Field, Section } from '../../components/ui';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { toErrorMessage } from '../lib/errors';
+import { COLORS, RADIUS } from '../lib/theme';
+import { Badge, BadgeRow, Chip, Field, Section } from '../components/ui';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
   CYCLE_OPTIONS,
   addMonthsISO,
@@ -30,9 +29,11 @@ import {
   toMonthlyAmount,
   todayISO,
   toISODate,
-} from '../../lib/format';
-import { PENALTY_OPTIONS, calculateEarlyTerminationFee } from '../../lib/contract';
-import { useServiceTemplates } from '../../hooks/useServiceTemplates';
+} from '../lib/format';
+import { PENALTY_OPTIONS, calculateEarlyTerminationFee } from '../lib/contract';
+import { useServiceTemplates } from '../hooks/useServiceTemplates';
+import { useSubscriptionRecord, type SubscriptionRecord } from '../hooks/useSubscriptionRecord';
+import { useSubscriptionMutations } from '../hooks/useSubscriptionMutations';
 import type {
   BillingCycle,
   Category,
@@ -40,7 +41,7 @@ import type {
   PaymentMethod,
   PenaltyType,
   ServiceTemplate,
-} from '../../types';
+} from '../types';
 
 const CURRENCIES: Currency[] = ['TRY', 'USD', 'EUR', 'GBP'];
 
@@ -55,29 +56,49 @@ const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
 
 const COMMITMENT_PRESETS = [12, 24, 36];
 
+/** Sayısal DB alanını form input'una çevirir. null/undefined ⇒ boş alan. */
+function amountToInput(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '';
+  return String(value);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// Abonelik & taahhüt formu — Scope 4
+// Abonelik formu — ekleme ve düzenleme aynı ekran
 //
-// Şablon seçim ekranından `templateId` ile gelinir; parametre yoksa "Elle Ekle".
-// Kaydetme sırası: subscriptions → contracts. REST üzerinde transaction
-// olmadığı için taahhüt kaydı başarısız olursa abonelik geri alınır.
+// Route parametreleri:
+//   (yok)                  → boş form, elle giriş
+//   ?templateId=<uuid>     → hazır şablondan ön-doldurma
+//   ?subscriptionId=<uuid> → düzenleme; abonelik + taahhüt yüklenir
+//
+// Ekleme ve düzenlemeyi tek ekranda tutmanın sebebi: alan listesi, doğrulama
+// kuralları ve cayma bedeli önizlemesi ikisinde de birebir aynı. İki ayrı ekran
+// olsaydı her kural iki yerde yaşardı ve zamanla birbirinden ayrışırdı.
 // ═══════════════════════════════════════════════════════════════════════════
 
-export default function AddFormScreen() {
-  const { templateId } = useLocalSearchParams<{ templateId?: string }>();
+export default function SubscriptionFormScreen() {
+  const { templateId, subscriptionId } = useLocalSearchParams<{
+    templateId?: string;
+    subscriptionId?: string;
+  }>();
 
-  // Katalog zaten şablon ekranında çekildi; burada tekrar çekiyoruz çünkü form
-  // derin bağlantıyla (veya yenilemeden sonra) doğrudan da açılabilmeli.
-  // 46 satırlık global katalog — ayrı bir tek-kayıt sorgusu kurmaya değmiyor.
-  const { templates, categories, loading, error, refetch } = useServiceTemplates();
+  const isEdit = Boolean(subscriptionId);
+
+  const catalog = useServiceTemplates();
+  const record = useSubscriptionRecord(subscriptionId ?? null);
 
   const template = templateId
-    ? (templates.find((t) => t.id === templateId) ?? null)
+    ? (catalog.templates.find((t) => t.id === templateId) ?? null)
     : null;
+
+  const loading = catalog.loading || record.loading;
+  const error = catalog.error ?? record.error;
+
+  const screenTitle = isEdit ? 'Aboneliği Düzenle' : 'Yeni Abonelik';
 
   if (loading) {
     return (
       <View style={[styles.container, styles.centerBlock]}>
+        <Stack.Screen options={{ headerShown: true, title: screenTitle }} />
         <StatusBar style="light" />
         <ActivityIndicator color={COLORS.primaryLight} />
       </View>
@@ -87,10 +108,17 @@ export default function AddFormScreen() {
   if (error) {
     return (
       <View style={[styles.container, styles.centerBlock]}>
+        <Stack.Screen options={{ headerShown: true, title: screenTitle }} />
         <StatusBar style="light" />
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity onPress={refetch} style={styles.retrySmall}>
+          <TouchableOpacity
+            onPress={() => {
+              void catalog.refetch();
+              void record.refetch();
+            }}
+            style={styles.retrySmall}
+          >
             <Text style={styles.retrySmallText}>Tekrar Dene</Text>
           </TouchableOpacity>
         </View>
@@ -98,12 +126,30 @@ export default function AddFormScreen() {
     );
   }
 
-  // Şablon seçildiyse ama katalogda bulunamadıysa (silinmiş/pasife alınmış)
-  // formu boş açmak yerine durumu söyle — sessizce "Elle Ekle"ye düşmek
-  // kullanıcının seçtiği servisi kaybettiğini gizlerdi.
+  // Düzenlemeye gelindi ama kayıt yok: silinmiş olabilir ya da RLS gizliyordur.
+  if (isEdit && record.notFound) {
+    return (
+      <View style={[styles.container, styles.centerBlock]}>
+        <Stack.Screen options={{ headerShown: true, title: screenTitle }} />
+        <StatusBar style="light" />
+        <View style={styles.errorBox}>
+          <Text style={styles.errorText}>
+            Bu abonelik bulunamadı. Başka bir cihazdan silinmiş olabilir.
+          </Text>
+          <TouchableOpacity onPress={() => router.replace('/(tabs)')} style={styles.retrySmall}>
+            <Text style={styles.retrySmallText}>Ana sayfaya dön</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // Şablon seçilmiş ama katalogda yok: sessizce boş forma düşmek, kullanıcının
+  // seçtiği servisi kaybettiğini gizlerdi.
   if (templateId && !template) {
     return (
       <View style={[styles.container, styles.centerBlock]}>
+        <Stack.Screen options={{ headerShown: true, title: screenTitle }} />
         <StatusBar style="light" />
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>
@@ -119,11 +165,15 @@ export default function AddFormScreen() {
   }
 
   return (
-    <SubscriptionForm
-      template={template}
-      categories={categories}
-      onSaved={() => router.replace('/(tabs)')}
-    />
+    <>
+      <Stack.Screen options={{ headerShown: true, title: screenTitle }} />
+      <SubscriptionForm
+        template={template}
+        record={record.record}
+        categories={catalog.categories}
+        onDone={() => router.replace('/(tabs)')}
+      />
+    </>
   );
 }
 
@@ -133,51 +183,94 @@ export default function AddFormScreen() {
 
 function SubscriptionForm({
   template,
+  record,
   categories,
-  onSaved,
+  onDone,
 }: {
   template: ServiceTemplate | null;
+  record: SubscriptionRecord | null;
   categories: Category[];
-  onSaved: () => void;
+  onDone: () => void;
 }) {
+  const existing = record?.subscription ?? null;
+  const existingContract = record?.contract ?? null;
+  const isEdit = existing !== null;
+
+  const { saving, deleting, addSubscription, updateSubscription, deleteSubscription } =
+    useSubscriptionMutations();
+
   // ── Abonelik alanları ──
-  const [name, setName] = useState(template?.name ?? '');
-  const [providerName, setProviderName] = useState(template?.provider_name ?? '');
-  const [categoryId, setCategoryId] = useState<string | null>(template?.category_id ?? null);
-  const [price, setPrice] = useState(
-    template?.default_price != null ? String(template.default_price) : '',
+  const [name, setName] = useState(existing?.name ?? template?.name ?? '');
+  const [providerName, setProviderName] = useState(
+    existing?.provider_name ?? template?.provider_name ?? '',
   );
-  const [currency, setCurrency] = useState<Currency>(template?.default_currency ?? 'TRY');
-  const [cycle, setCycle] = useState<BillingCycle>(template?.default_billing_cycle ?? 'monthly');
-  const [interval, setIntervalValue] = useState(1);
+  const [categoryId, setCategoryId] = useState<string | null>(
+    existing?.category_id ?? template?.category_id ?? null,
+  );
+  const [price, setPrice] = useState(
+    amountToInput(existing?.price ?? template?.default_price),
+  );
+  const [currency, setCurrency] = useState<Currency>(
+    existing?.currency ?? template?.default_currency ?? 'TRY',
+  );
+  const [cycle, setCycle] = useState<BillingCycle>(
+    existing?.billing_cycle ?? template?.default_billing_cycle ?? 'monthly',
+  );
+  const [interval, setIntervalValue] = useState(existing?.billing_interval ?? 1);
+  const [startInput, setStartInput] = useState(
+    formatDateInput(existing?.start_date ?? todayISO()),
+  );
   const [nextPaymentInput, setNextPaymentInput] = useState(
-    formatDateInput(addMonthsISO(todayISO(), 1) ?? todayISO()),
+    formatDateInput(
+      existing?.next_payment_date ?? addMonthsISO(todayISO(), 1) ?? todayISO(),
+    ),
   );
 
   // ── Gelişmiş ──
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
-  const [reminderDays, setReminderDays] = useState('3');
-  const [notes, setNotes] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(
+    existing?.payment_method ?? null,
+  );
+  const [reminderDays, setReminderDays] = useState(
+    String(existing?.reminder_days_before ?? 3),
+  );
+  const [notes, setNotes] = useState(existing?.notes ?? '');
 
   // ── Taahhüt ──
-  const [hasContract, setHasContract] = useState(template?.supports_contract ?? false);
-  const [contractStartInput, setContractStartInput] = useState(formatDateInput(todayISO()));
-  const [commitmentMonths, setCommitmentMonths] = useState('24');
-  const [penaltyType, setPenaltyType] = useState<PenaltyType>(
-    template?.default_penalty_type && template.default_penalty_type !== 'none'
-      ? template.default_penalty_type
-      : 'remaining_discount',
+  const [hasContract, setHasContract] = useState(
+    existingContract !== null || (!isEdit && (template?.supports_contract ?? false)),
   );
-  const [penaltyFixed, setPenaltyFixed] = useState('');
-  const [monthlyDiscount, setMonthlyDiscount] = useState('');
-  const [deviceOutstanding, setDeviceOutstanding] = useState('');
-  const [penaltyCap, setPenaltyCap] = useState('');
-  const [autoRenew, setAutoRenew] = useState(false);
-  const [postContractPrice, setPostContractPrice] = useState('');
+  const [contractStartInput, setContractStartInput] = useState(
+    formatDateInput(existingContract?.start_date ?? existing?.start_date ?? todayISO()),
+  );
+  const [commitmentMonths, setCommitmentMonths] = useState(
+    String(existingContract?.commitment_months ?? 24),
+  );
+  const [penaltyType, setPenaltyType] = useState<PenaltyType>(
+    existingContract?.penalty_type ??
+      (template?.default_penalty_type && template.default_penalty_type !== 'none'
+        ? template.default_penalty_type
+        : 'remaining_discount'),
+  );
+  const [penaltyFixed, setPenaltyFixed] = useState(
+    amountToInput(existingContract?.penalty_fixed_amount),
+  );
+  const [monthlyDiscount, setMonthlyDiscount] = useState(
+    amountToInput(existingContract?.monthly_discount_amount),
+  );
+  const [deviceOutstanding, setDeviceOutstanding] = useState(
+    amountToInput(existingContract?.device_outstanding_amount),
+  );
+  const [penaltyCap, setPenaltyCap] = useState(
+    amountToInput(existingContract?.penalty_cap_amount),
+  );
+  const [autoRenew, setAutoRenew] = useState(existingContract?.auto_renew ?? false);
+  const [postContractPrice, setPostContractPrice] = useState(
+    amountToInput(existingContract?.post_contract_price),
+  );
 
-  const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // ── Türetilmiş önizlemeler ──
   const priceValue = parseAmountInput(price);
@@ -218,8 +311,16 @@ function SubscriptionForm({
     if (!name.trim()) return 'Servis adı gerekli.';
     if (priceValue === null) return 'Geçerli bir tutar gir.';
 
+    const startISO = parseDateInput(startInput);
+    if (!startISO) return 'Başlangıç tarihi GG.AA.YYYY biçiminde olmalı.';
+
     const nextISO = parseDateInput(nextPaymentInput);
     if (!nextISO) return 'Sonraki ödeme tarihi GG.AA.YYYY biçiminde olmalı.';
+
+    // DB'deki subscriptions_next_payment_after_start CHECK'ini önden karşıla.
+    if (nextISO < startISO) {
+      return 'Sonraki ödeme tarihi, başlangıç tarihinden önce olamaz.';
+    }
 
     const reminder = Number.parseInt(reminderDays, 10);
     if (!Number.isFinite(reminder) || reminder < 0 || reminder > 90) {
@@ -253,95 +354,80 @@ function SubscriptionForm({
       setFormError(validationError);
       return;
     }
-
-    setSaving(true);
     setFormError(null);
 
-    let createdSubscriptionId: string | null = null;
+    const startISO = parseDateInput(startInput)!;
+    const nextISO = parseDateInput(nextPaymentInput)!;
+
+    const payload = {
+      subscription: {
+        category_id: categoryId,
+        template_id: existing?.template_id ?? template?.id ?? null,
+        name: name.trim(),
+        provider_name: providerName.trim() || null,
+        description: existing?.description ?? null,
+        logo_url: existing?.logo_url ?? template?.logo_url ?? null,
+        color: existing?.color ?? template?.color ?? null,
+        price: priceValue!,
+        currency,
+        billing_cycle: cycle,
+        billing_interval: interval,
+        start_date: startISO,
+        next_payment_date: nextISO,
+        last_payment_date: existing?.last_payment_date ?? null,
+        trial_end_date: existing?.trial_end_date ?? null,
+        cancelled_at: existing?.cancelled_at ?? null,
+        status: existing?.status ?? ('active' as const),
+        source: existing?.source ?? (template ? 'template' : 'manual'),
+        payment_method: paymentMethod,
+        reminder_days_before: Number.parseInt(reminderDays, 10),
+        notes: notes.trim() || null,
+      },
+      contract:
+        hasContract && contractStartISO && contractEndISO
+          ? {
+              start_date: contractStartISO,
+              end_date: contractEndISO,
+              commitment_months: monthsValue,
+              penalty_type: penaltyType,
+              penalty_fixed_amount: parseAmountInput(penaltyFixed),
+              monthly_discount_amount: parseAmountInput(monthlyDiscount),
+              device_outstanding_amount: parseAmountInput(deviceOutstanding) ?? 0,
+              penalty_cap_amount: parseAmountInput(penaltyCap),
+              auto_renew: autoRenew,
+              post_contract_price: parseAmountInput(postContractPrice),
+              contract_number: existingContract?.contract_number ?? null,
+              notes: existingContract?.notes ?? null,
+            }
+          : null,
+    };
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Oturum bulunamadı. Lütfen tekrar giriş yap.');
-
-      const userId = session.user.id;
-      const nextISO = parseDateInput(nextPaymentInput)!;
-      const startISO = hasContract && contractStartISO ? contractStartISO : todayISO();
-
-      // start_date ≤ next_payment_date — DB CHECK'i bunu şart koşuyor.
-      const safeStartISO = startISO <= nextISO ? startISO : nextISO;
-
-      const { data: subscription, error: subError } = await supabase
-        .from('subscriptions')
-        .insert({
-          user_id: userId,
-          category_id: categoryId,
-          template_id: template?.id ?? null,
-          name: name.trim(),
-          provider_name: providerName.trim() || null,
-          price: priceValue,
-          currency,
-          billing_cycle: cycle,
-          billing_interval: interval,
-          start_date: safeStartISO,
-          next_payment_date: nextISO,
-          status: 'active',
-          source: template ? 'template' : 'manual',
-          payment_method: paymentMethod,
-          reminder_days_before: Number.parseInt(reminderDays, 10),
-          notes: notes.trim() || null,
-        })
-        .select('id')
-        .single();
-
-      if (subError) throw subError;
-      createdSubscriptionId = subscription.id as string;
-
-      if (hasContract && contractStartISO && contractEndISO) {
-        const { error: contractError } = await supabase.from('contracts').insert({
-          user_id: userId,
-          subscription_id: createdSubscriptionId,
-          start_date: contractStartISO,
-          end_date: contractEndISO,
-          commitment_months: monthsValue,
-          penalty_type: penaltyType,
-          penalty_fixed_amount: parseAmountInput(penaltyFixed),
-          monthly_discount_amount: parseAmountInput(monthlyDiscount),
-          device_outstanding_amount: parseAmountInput(deviceOutstanding) ?? 0,
-          penalty_cap_amount: parseAmountInput(penaltyCap),
-          auto_renew: autoRenew,
-          post_contract_price: parseAmountInput(postContractPrice),
-        });
-
-        if (contractError) throw contractError;
+      if (isEdit && existing) {
+        await updateSubscription(existing.id, payload);
+      } else {
+        await addSubscription(payload);
       }
-
-      onSaved();
+      onDone();
     } catch (err: unknown) {
-      console.error('[AddSubscription] Kayıt hatası:', err);
-
-      // REST üzerinde transaction yok: taahhüt eklenemediyse yarım kalmış
-      // aboneliği geri al, yoksa kullanıcı taahhütsüz bir kayıtla kalır.
-      if (createdSubscriptionId) {
-        const { error: cleanupError } = await supabase
-          .from('subscriptions')
-          .delete()
-          .eq('id', createdSubscriptionId);
-
-        if (cleanupError) {
-          console.error('[AddSubscription] Geri alma başarısız:', cleanupError);
-          Alert.alert(
-            'Yarım kayıt',
-            'Taahhüt eklenemedi ve abonelik kaydı geri alınamadı. ' +
-              'Ana ekrandan kontrol etmen gerekebilir.',
-          );
-        }
-      }
-
       setFormError(toErrorMessage(err));
-    } finally {
-      setSaving(false);
     }
   }
+
+  // ── Sil ──
+  async function handleDelete() {
+    if (!existing) return;
+    try {
+      await deleteSubscription(existing.id);
+      setConfirmDelete(false);
+      onDone();
+    } catch (err: unknown) {
+      setConfirmDelete(false);
+      setFormError(toErrorMessage(err));
+    }
+  }
+
+  const busy = saving || deleting;
 
   return (
     <KeyboardAvoidingView
@@ -354,17 +440,20 @@ function SubscriptionForm({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.screenTitle}>{template?.name ?? 'Yeni Abonelik'}</Text>
+        <Text style={styles.screenTitle}>
+          {isEdit ? existing.name : (template?.name ?? 'Yeni Abonelik')}
+        </Text>
         <BadgeRow>
-          <Badge
-            label={template ? 'Şablondan' : 'Elle giriş'}
-            tone={template ? 'info' : 'neutral'}
-            icon={template ? '★' : '✎'}
-          />
-          {template?.provider_name ? (
-            <Badge label={template.provider_name} tone="neutral" />
-          ) : null}
-          {template?.supports_contract ? (
+          {isEdit ? (
+            <Badge label="Düzenleniyor" tone="info" icon="✎" />
+          ) : (
+            <Badge
+              label={template ? 'Şablondan' : 'Elle giriş'}
+              tone={template ? 'info' : 'neutral'}
+              icon={template ? '★' : '✎'}
+            />
+          )}
+          {!isEdit && template?.supports_contract ? (
             <Badge label="Taahhütlü olabilir" tone="warn" icon="!" />
           ) : null}
         </BadgeRow>
@@ -480,8 +569,19 @@ function SubscriptionForm({
         </Section>
 
         {/* ── Takvim ── */}
-        <Section title="Sonraki Ödeme">
-          <Field label="Tarih" required hint="GG.AA.YYYY">
+        <Section title="Takvim">
+          <Field label="Başlangıç tarihi" required hint="GG.AA.YYYY">
+            <TextInput
+              style={styles.input}
+              value={startInput}
+              onChangeText={(v) => setStartInput(maskDateInput(v))}
+              placeholder="01.09.2025"
+              placeholderTextColor={COLORS.dimmest}
+              keyboardType="number-pad"
+            />
+          </Field>
+
+          <Field label="Sonraki ödeme" required hint="GG.AA.YYYY">
             <TextInput
               style={styles.input}
               value={nextPaymentInput}
@@ -532,6 +632,16 @@ function SubscriptionForm({
               thumbColor="#fff"
             />
           </View>
+
+          {/* Düzenlemede switch kapatılırsa taahhüt satırı silinecek — bunu
+              kaydetmeden önce söyle, kullanıcı veri kaybını fark etmeyebilir. */}
+          {isEdit && existingContract && !hasContract && (
+            <View style={styles.warnBox}>
+              <Text style={styles.warnText}>
+                Kaydettiğinde bu aboneliğin taahhüt kaydı silinecek.
+              </Text>
+            </View>
+          )}
 
           {hasContract && (
             <>
@@ -748,21 +858,49 @@ function SubscriptionForm({
         )}
 
         <TouchableOpacity
-          style={[styles.saveButton, saving && styles.saveButtonDisabled]}
+          style={[styles.saveButton, busy && styles.buttonBusy]}
           onPress={handleSave}
-          disabled={saving}
+          disabled={busy}
           activeOpacity={0.85}
         >
           {saving ? (
-            <View style={styles.savingRow}>
+            <View style={styles.busyRow}>
               <ActivityIndicator color="#fff" />
               <Text style={styles.saveButtonText}>Kaydediliyor…</Text>
             </View>
           ) : (
-            <Text style={styles.saveButtonText}>Kaydet</Text>
+            <Text style={styles.saveButtonText}>
+              {isEdit ? 'Değişiklikleri Kaydet' : 'Kaydet'}
+            </Text>
           )}
         </TouchableOpacity>
+
+        {isEdit && (
+          <TouchableOpacity
+            style={[styles.deleteButton, busy && styles.buttonBusy]}
+            onPress={() => setConfirmDelete(true)}
+            disabled={busy}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.deleteButtonText}>Aboneliği Sil</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
+
+      <ConfirmDialog
+        visible={confirmDelete}
+        title="Abonelik silinsin mi?"
+        message={
+          existing
+            ? `"${existing.name}" ve varsa taahhüt kaydı kalıcı olarak silinecek. Bu işlem geri alınamaz.`
+            : ''
+        }
+        confirmLabel="Sil"
+        destructive
+        busy={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -839,6 +977,16 @@ const styles = StyleSheet.create({
   switchLabel: { fontSize: 15, fontWeight: '600', color: COLORS.text },
   switchHint: { fontSize: 12.5, color: COLORS.dim, lineHeight: 17 },
 
+  warnBox: {
+    backgroundColor: 'rgba(245,158,11,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.4)',
+    borderRadius: RADIUS.sm,
+    padding: 12,
+    marginBottom: 16,
+  },
+  warnText: { color: COLORS.warn, fontSize: 13, lineHeight: 19 },
+
   advancedToggle: { paddingVertical: 16, alignItems: 'center' },
   advancedToggleText: { fontSize: 14, color: COLORS.primaryLight, fontWeight: '600' },
 
@@ -867,7 +1015,19 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 8,
   },
-  saveButtonDisabled: { opacity: 0.6 },
-  savingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+
+  deleteButton: {
+    borderRadius: RADIUS.md,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.5)',
+    backgroundColor: 'rgba(239,68,68,0.12)',
+  },
+  deleteButtonText: { color: COLORS.danger, fontSize: 15, fontWeight: '700' },
+
+  buttonBusy: { opacity: 0.6 },
+  busyRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 });

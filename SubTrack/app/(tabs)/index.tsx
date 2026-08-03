@@ -279,6 +279,10 @@ function SummaryCard({
 // ═══════════════════════════════════════════════════════════════════════════
 
 function SubscriptionCard({ item }: { item: SubscriptionEnriched }) {
+  // Karta dokunmak düzenleme formunu açar; form aynı route'ta subscriptionId
+  // ile "düzenle" moduna geçiyor (bkz. app/form.tsx).
+  const openEdit = () => router.push(`/form?subscriptionId=${item.id}`);
+
   const accent = item.color ?? item.category_color ?? COLORS.primary;
   const icon = item.category_icon ?? '📦';
 
@@ -293,7 +297,13 @@ function SubscriptionCard({ item }: { item: SubscriptionEnriched }) {
   const penalty = Number(item.early_termination_fee ?? 0);
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity
+      style={styles.card}
+      onPress={openEdit}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={`${item.name} aboneliğini düzenle`}
+    >
       <View style={styles.cardTop}>
         <View style={[styles.iconCircle, { backgroundColor: `${accent}33`, borderColor: `${accent}66` }]}>
           <Text style={styles.iconText}>{icon}</Text>
@@ -369,7 +379,7 @@ function SubscriptionCard({ item }: { item: SubscriptionEnriched }) {
           <Text style={styles.renewalDate}>{formatDate(item.next_payment_date)}</Text>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 
