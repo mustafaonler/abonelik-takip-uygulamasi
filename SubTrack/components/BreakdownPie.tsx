@@ -79,8 +79,14 @@ export function BreakdownPie({
       </View>
 
       <View style={styles.legend}>
-        {slices.map((s) => (
-          <View key={s.key} style={styles.legendRow}>
+        {slices.map((s, index) => (
+          <View
+            key={s.key}
+            // Son satırda ayraç yok: kartın dibine yakın duran tam genişlikte
+            // bir çizgi, yuvarlak köşeye denk gelince içerik kesilmiş gibi
+            // görünüyor. Ayraçlar satırları ayırmak için, listeyi kapatmak için değil.
+            style={[styles.legendRow, index === slices.length - 1 && styles.legendRowLast]}
+          >
             <View style={[styles.swatch, { backgroundColor: s.color }]} />
             <Text style={styles.legendName} numberOfLines={1}>
               {s.icon ? `${s.icon} ` : ''}
@@ -131,6 +137,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.04)',
   },
+  legendRowLast: { borderBottomWidth: 0 },
   swatch: { width: 11, height: 11, borderRadius: RADIUS.pill },
   legendName: { flex: 1, fontSize: 13.5, color: COLORS.text, fontWeight: '500' },
   legendPct: {

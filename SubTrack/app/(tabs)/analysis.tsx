@@ -209,6 +209,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     padding: 20,
+    // Köşe yarıçapı 28: dipteki tam genişlikte legend satırı 20px boşlukla
+    // kavise sürtüyor ve kesikmiş gibi duruyordu. Alt boşluk yarıçapa yetecek
+    // kadar açıldı. (index.tsx'teki breakdownCard ile aynı değer.)
+    paddingBottom: 28,
     alignItems: 'center',
   },
   breakdownTitle: {
