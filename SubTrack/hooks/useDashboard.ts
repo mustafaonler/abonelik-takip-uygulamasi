@@ -31,9 +31,9 @@ export interface NextPayment {
   daysUntil: number;
 }
 
-/** Pasta grafiği için kategori başına aylık TRY harcaması. */
-export interface CategorySlice {
-  /** category_id, kategorisizler için sabit anahtar. */
+/** Pasta grafiği dilimi — hem abonelik hem kategori dağılımı bunu kullanır. */
+export interface BreakdownSlice {
+  /** Gruplama anahtarı (subscription.id ya da category_id). */
   key: string;
   name: string;
   icon: string | null;
@@ -44,13 +44,52 @@ export interface CategorySlice {
   pct: number;
 }
 
-/** Rengi olmayan kategoriler için yedek palet — mor/lila ekseninde. */
-const FALLBACK_COLORS = [
-  '#a78bfa', '#7c3aed', '#c084fc', '#f59e0b',
-  '#ec4899', '#0ea5e9', '#14b8a6', '#94a3b8',
+/**
+ * Dilim paleti — koyu zeminde ayırt edilebilen, mor eksenli tonlar.
+ * Abonelik dağılımında renk KATEGORİDEN gelmiyor: aynı kategorideki iki
+ * abonelik (Netflix + Exxen) aynı rengi alır ve grafiğin tüm amacı olan
+ * "hangi servise ne ödüyorum" ayrımı kaybolurdu. Bu yüzden sırayla dağıtılıyor.
+ */
+const SLICE_COLORS = [
+  '#a78bfa', '#f59e0b', '#0ea5e9', '#ec4899',
+  '#22c55e', '#7c3aed', '#14b8a6', '#f97316',
+  '#c084fc', '#38bdf8', '#fb7185', '#84cc16',
 ];
 
 const UNCATEGORIZED_KEY = '__none__';
+
+/**
+ * Pastada ayrı ayrı gösterilecek en fazla dilim. Fazlası "Diğer"de toplanır —
+ * 15 dilimlik bir pastada ne dilimler ne de açıklama okunabiliyor.
+ */
+const MAX_SLICES = 8;
+
+const OTHER_COLOR = '#64748b';
+
+/** Tutarları yüzdeye çevirir, büyükten küçüğe sıralar, fazlasını "Diğer"de toplar. */
+function finalizeSlices(raw: BreakdownSlice[]): BreakdownSlice[] {
+  const sorted = [...raw].sort((a, b) => b.amount - a.amount);
+  const total = sorted.reduce((sum, s) => sum + s.amount, 0);
+  if (total <= 0) return [];
+
+  let slices = sorted;
+
+  if (sorted.length > MAX_SLICES) {
+    const head = sorted.slice(0, MAX_SLICES - 1);
+    const tail = sorted.slice(MAX_SLICES - 1);
+    head.push({
+      key: '__other__',
+      name: `Diğer (${tail.length})`,
+      icon: null,
+      color: OTHER_COLOR,
+      amount: tail.reduce((sum, s) => sum + s.amount, 0),
+      pct: 0,
+    });
+    slices = head;
+  }
+
+  return slices.map((s) => ({ ...s, pct: (s.amount / total) * 100 }));
+}
 
 export interface UseDashboardResult {
   /** Yalnızca ilk yükleme. Pull-to-refresh sırasında false kalır. */
@@ -84,12 +123,19 @@ export interface UseDashboardResult {
   endingContracts: SubscriptionEnriched[];
 
   /**
-   * Kategori bazında aylık harcama dağılımı, büyükten küçüğe.
-   * Yalnızca TRY — üstündeki özet kartı da TRY gösteriyor ve şema boyunca
-   * kur çevrimi bilinçli olarak yapılmıyor. Farklı para birimlerini tek
-   * pastada toplamak sessizce yanlış bir dağılım çizerdi.
+   * Abonelik bazında aylık harcama dağılımı — ana sayfa grafiği.
+   * Her abonelik kendi dilimi: aynı kategorideki Netflix ve Exxen ayrı görünür.
    */
-  categoryBreakdown: CategorySlice[];
+  subscriptionBreakdown: BreakdownSlice[];
+
+  /**
+   * Kategori bazında aylık harcama dağılımı — Analizler sekmesi.
+   *
+   * İkisi de yalnızca TRY. Özet kartı da TRY gösteriyor ve şema boyunca kur
+   * çevrimi bilinçli olarak yapılmıyor; farklı para birimlerini tek pastada
+   * toplamak sessizce yanlış bir dağılım çizerdi.
+   */
+  categoryBreakdown: BreakdownSlice[];
 
   /** Pull-to-refresh ve hata sonrası "Tekrar Dene" için. */
   refetch: () => Promise<void>;
@@ -212,47 +258,55 @@ export function useDashboard(): UseDashboardResult {
       s.contract_days_left <= CONTRACT_ENDING_WINDOW_DAYS,
   );
 
-  // ── Kategori dağılımı ────────────────────────────────────────────────────
-  const categoryBreakdown = ((): CategorySlice[] => {
-    const buckets = new Map<string, CategorySlice>();
+  // ── Grafik dağılımları ───────────────────────────────────────────────────
+  // Pastaya girecek satırlar: yalnızca TRY ve pozitif tutar.
+  // (TRY kısıtının gerekçesi için bkz. categoryBreakdown açıklaması.)
+  const chartable = subscriptions.filter(
+    (s) => s.currency === 'TRY' && Number(s.monthly_amount ?? 0) > 0,
+  );
 
-    for (const s of subscriptions) {
-      // TRY dışını dışarıda bırak — bkz. categoryBreakdown açıklaması.
-      if (s.currency !== 'TRY') continue;
+  // Abonelik bazlı: her kayıt kendi dilimi, renk sırayla paletten.
+  const subscriptionBreakdown = finalizeSlices(
+    chartable.map((s, index) => ({
+      key: s.id,
+      name: s.name,
+      icon: s.category_icon ?? null,
+      color: SLICE_COLORS[index % SLICE_COLORS.length],
+      amount: Number(s.monthly_amount),
+      pct: 0,
+    })),
+  );
 
-      const amount = Number(s.monthly_amount ?? 0);
-      if (!Number.isFinite(amount) || amount <= 0) continue;
+  // Kategori bazlı: aynı kategorideki abonelikler tek dilimde toplanır.
+  const categoryBreakdown = finalizeSlices(
+    [
+      ...chartable
+        .reduce((buckets, s) => {
+          const key = s.category_id ?? UNCATEGORIZED_KEY;
+          const existing = buckets.get(key);
+          const amount = Number(s.monthly_amount);
 
-      const key = s.category_id ?? UNCATEGORIZED_KEY;
-      const existing = buckets.get(key);
+          if (existing) {
+            existing.amount += amount;
+          } else {
+            buckets.set(key, {
+              key,
+              name: s.category_name ?? 'Kategorisiz',
+              icon: s.category_icon ?? null,
+              // Kategorinin kendi DB rengi kartlardaki ikon rengiyle aynı;
+              // dilim ile kart görsel olarak eşleşsin diye onu tercih ediyoruz.
+              color:
+                s.category_color ?? SLICE_COLORS[buckets.size % SLICE_COLORS.length],
+              amount,
+              pct: 0,
+            });
+          }
 
-      if (existing) {
-        existing.amount += amount;
-      } else {
-        buckets.set(key, {
-          key,
-          name: s.category_name ?? 'Kategorisiz',
-          icon: s.category_icon ?? null,
-          // Kategorinin kendi rengi kartlardaki ikon rengiyle aynı; pasta
-          // dilimi ile altındaki kart görsel olarak eşleşsin diye onu kullanıyoruz.
-          color: s.category_color ?? FALLBACK_COLORS[buckets.size % FALLBACK_COLORS.length],
-          amount,
-          pct: 0,
-        });
-      }
-    }
-
-    const slices = [...buckets.values()].sort((a, b) => b.amount - a.amount);
-    const total = slices.reduce((sum, slice) => sum + slice.amount, 0);
-
-    if (total <= 0) return [];
-
-    for (const slice of slices) {
-      slice.pct = (slice.amount / total) * 100;
-    }
-
-    return slices;
-  })();
+          return buckets;
+        }, new Map<string, BreakdownSlice>())
+        .values(),
+    ],
+  );
 
   return {
     loading,
@@ -267,6 +321,7 @@ export function useDashboard(): UseDashboardResult {
     nextPayment,
     upcomingPayments,
     endingContracts,
+    subscriptionBreakdown,
     categoryBreakdown,
     refetch,
   };

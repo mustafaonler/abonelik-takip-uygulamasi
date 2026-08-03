@@ -14,7 +14,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
 import { useDashboard } from '../../hooks/useDashboard';
 import { Badge, BadgeRow } from '../../components/ui';
-import { CategoryPie } from '../../components/CategoryPie';
+import { BreakdownPie } from '../../components/BreakdownPie';
 import { COLORS, TONES, type Tone } from '../../lib/theme';
 import {
   formatCurrency,
@@ -72,7 +72,7 @@ export default function DashboardScreen() {
     otherCurrencies,
     nextPayment,
     endingContracts,
-    categoryBreakdown,
+    subscriptionBreakdown,
     refetch,
   } = useDashboard();
 
@@ -168,13 +168,12 @@ export default function DashboardScreen() {
               nextPaymentDate={nextPayment ? formatDate(nextPayment.date) : null}
             />
 
-            {/* TRY harcaması olduğu sürece göster. Tek kategoride pasta dolu
-                bir daire oluyor ve karşılaştırma bilgisi taşımıyor; yine de
-                gizlemiyoruz — kullanıcı grafiğin "kaybolmasını" hata sanıyor. */}
-            {categoryBreakdown.length > 0 && (
+            {/* Abonelik bazlı: her servis kendi dilimi. Kategori bazlı görünüm
+                Analizler sekmesinde. */}
+            {subscriptionBreakdown.length > 0 && (
               <View style={styles.breakdownCard}>
-                <Text style={styles.breakdownTitle}>Kategori Dağılımı</Text>
-                <CategoryPie slices={categoryBreakdown} width={chartWidth} />
+                <Text style={styles.breakdownTitle}>Servis Dağılımı</Text>
+                <BreakdownPie slices={subscriptionBreakdown} width={chartWidth} />
               </View>
             )}
 

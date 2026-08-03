@@ -79,6 +79,16 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="analysis"
+        options={{
+          title: 'Analizler',
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon glyph="◔" color={color} focused={focused} />
+          ),
+          tabBarLabel: ({ color }) => <TabLabel text="Analizler" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="add"
         options={{
           title: 'Yeni Ekle',

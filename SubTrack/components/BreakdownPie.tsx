@@ -3,16 +3,19 @@ import { View, Text, StyleSheet } from 'react-native';
 import { PieChart } from 'react-native-chart-kit';
 import { COLORS, RADIUS } from '../lib/theme';
 import { formatCurrency } from '../lib/format';
-import type { CategorySlice } from '../hooks/useDashboard';
+import type { BreakdownSlice } from '../hooks/useDashboard';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CategoryPie — aylık harcamanın kategori dağılımı
+// BreakdownPie — aylık harcama dağılımı halkası
+//
+// Gruplamadan bağımsız: ana sayfa abonelik bazlı, Analizler sekmesi kategori
+// bazlı dilim besliyor. Bileşen sadece çiziyor.
 //
 // Grafik react-native-chart-kit'in PieChart'ı, legend'i bizim.
 // hasLegend={false} çünkü kütüphanenin legend'i SVG <Text> ile çiziliyor:
-// sabit satır aralığı kullanıyor, uzun Türkçe kategori adlarında ("Operatör &
-// İnternet") taşıyor ve sarmalamıyor. Kendi legend'imiz normal View/Text
-// olduğu için sarmalıyor, tutarı ve yüzdeyi birlikte gösterebiliyor.
+// sabit satır aralığı kullanıyor, uzun Türkçe adlarda ("Operatör & İnternet")
+// taşıyor ve sarmalamıyor. Kendi legend'imiz normal View/Text olduğu için
+// sarmalıyor, tutarı ve yüzdeyi birlikte gösterebiliyor.
 //
 // ⚠ Konumlandırma: kütüphane dilimleri x = width/4 + paddingLeft noktasına
 // ötelenmiş bir <G> içinde çiziyor. Pastayı yatayda ortalamak için
@@ -22,13 +25,16 @@ import type { CategorySlice } from '../hooks/useDashboard';
 
 const CHART_HEIGHT = 200;
 
-export function CategoryPie({
+export function BreakdownPie({
   slices,
   width,
+  centerLabel = 'aylık',
 }: {
-  slices: CategorySlice[];
+  slices: BreakdownSlice[];
   /** Kartın iç genişliği. Grafik bunun tamamını kullanır. */
   width: number;
+  /** Halkanın ortasındaki üst satır. */
+  centerLabel?: string;
 }) {
   if (slices.length === 0) return null;
 
@@ -65,7 +71,7 @@ export function CategoryPie({
             toplam tutarı yazabiliyoruz. Kütüphane donut desteklemiyor
             (r: 0 sabit), bu yüzden üstüne bindiriyoruz. */}
         <View style={styles.donutHole} pointerEvents="none">
-          <Text style={styles.holeLabel}>aylık</Text>
+          <Text style={styles.holeLabel}>{centerLabel}</Text>
           <Text style={styles.holeValue} numberOfLines={1} adjustsFontSizeToFit>
             {formatCurrency(total, 'TRY')}
           </Text>
