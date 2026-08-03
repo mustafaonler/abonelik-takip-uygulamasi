@@ -168,9 +168,10 @@ export default function DashboardScreen() {
               nextPaymentDate={nextPayment ? formatDate(nextPayment.date) : null}
             />
 
-            {/* Dağılım tek kategoriden ibaretse pasta bilgi taşımıyor —
-                dolu bir daire çizmek yerine hiç göstermiyoruz. */}
-            {categoryBreakdown.length > 1 && (
+            {/* TRY harcaması olduğu sürece göster. Tek kategoride pasta dolu
+                bir daire oluyor ve karşılaştırma bilgisi taşımıyor; yine de
+                gizlemiyoruz — kullanıcı grafiğin "kaybolmasını" hata sanıyor. */}
+            {categoryBreakdown.length > 0 && (
               <View style={styles.breakdownCard}>
                 <Text style={styles.breakdownTitle}>Kategori Dağılımı</Text>
                 <CategoryPie slices={categoryBreakdown} width={chartWidth} />
