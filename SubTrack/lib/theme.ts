@@ -32,3 +32,53 @@ export const RADIUS = {
   xl: 28,
   pill: 999,
 } as const;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Rozet tonları
+//
+// Koyu zeminde dolu renk fazla bağırıyor; onun yerine düşük opaklıkta zemin +
+// belirgin kenarlık + tam doygun metin kullanıyoruz. Metin rengi COLORS'tan
+// geldiği için kontrast koyu temada okunur kalıyor.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type Tone = 'neutral' | 'info' | 'success' | 'warn' | 'danger';
+
+export const TONES: Record<Tone, { bg: string; border: string; text: string }> = {
+  neutral: {
+    bg: COLORS.surfaceStrong,
+    border: COLORS.border,
+    text: COLORS.muted,
+  },
+  info: {
+    bg: 'rgba(124,58,237,0.15)',
+    border: 'rgba(167,139,250,0.40)',
+    text: COLORS.primaryLight,
+  },
+  success: {
+    bg: 'rgba(34,197,94,0.13)',
+    border: 'rgba(34,197,94,0.38)',
+    text: COLORS.success,
+  },
+  warn: {
+    bg: 'rgba(245,158,11,0.14)',
+    border: 'rgba(245,158,11,0.42)',
+    text: COLORS.warn,
+  },
+  danger: {
+    bg: 'rgba(239,68,68,0.14)',
+    border: 'rgba(239,68,68,0.42)',
+    text: COLORS.danger,
+  },
+};
+
+/**
+ * Kalan güne göre aciliyet tonu. Taahhüt bitişi ve ödeme tarihi aynı eşikleri
+ * kullanır ki kullanıcı iki farklı yerde aynı rengi aynı anlamda görsün.
+ */
+export function daysTone(days: number | null | undefined): Tone {
+  if (days == null) return 'neutral';
+  if (days < 0) return 'danger';
+  if (days <= 7) return 'danger';
+  if (days <= 30) return 'warn';
+  return 'info';
+}

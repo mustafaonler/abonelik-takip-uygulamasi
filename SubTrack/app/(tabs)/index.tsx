@@ -13,7 +13,8 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
 import { useDashboard } from '../../hooks/useDashboard';
-import { COLORS } from '../../lib/theme';
+import { Badge, BadgeRow } from '../../components/ui';
+import { COLORS, TONES, type Tone } from '../../lib/theme';
 import {
   formatCurrency,
   formatCycle,
@@ -34,11 +35,20 @@ function paymentTone(days: number): string {
   return COLORS.muted;
 }
 
-/** Taahhüt bitişine kalan güne göre vurgu rengi. */
+/**
+ * Taahhüt bitişine kalan güne göre ton. Ödeme eşiklerinden ayrı: taahhüdün
+ * bitmesine 1 ay kalması, ödemeye 1 ay kalmasından çok daha acil bir karar
+ * (cayma bedeli o pencerede hızla düşüyor).
+ */
+function contractBadgeTone(days: number): Tone {
+  if (days <= 30) return 'danger';
+  if (days <= 60) return 'warn';
+  return 'info';
+}
+
+/** Taahhüt ilerleme çubuğunun dolgu rengi — rozetle aynı tonu kullanır. */
 function contractTone(days: number): string {
-  if (days <= 30) return COLORS.danger;
-  if (days <= 60) return COLORS.warn;
-  return COLORS.primaryLight;
+  return TONES[contractBadgeTone(days)].text;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -294,11 +304,7 @@ function SubscriptionCard({ item }: { item: SubscriptionEnriched }) {
             <Text style={styles.cardTitle} numberOfLines={1}>
               {item.name}
             </Text>
-            {item.status === 'trial' && (
-              <View style={styles.trialBadge}>
-                <Text style={styles.trialBadgeText}>DENEME</Text>
-              </View>
-            )}
+            {item.status === 'trial' && <Badge label="DENEME" tone="success" />}
           </View>
           <Text style={styles.cardSubtitle} numberOfLines={1}>
             {item.category_name ?? item.provider_name ?? 'Kategorisiz'}
@@ -329,16 +335,29 @@ function SubscriptionCard({ item }: { item: SubscriptionEnriched }) {
               ]}
             />
           </View>
-          <View style={styles.contractMeta}>
-            <Text style={[styles.contractText, { color: contractTone(contractDays) }]}>
-              Taahhüt · {formatRemaining(contractDays)}
-            </Text>
+          <BadgeRow>
+            <Badge
+              label={`Taahhüt · ${formatRemaining(contractDays)}`}
+              tone={contractBadgeTone(contractDays)}
+              icon="◷"
+            />
             {penalty > 0 && (
-              <Text style={styles.penaltyText}>
-                Cayma {formatCurrency(penalty, item.currency)}
-              </Text>
+              <Badge
+                label={`Cayma ${formatCurrency(penalty, item.currency)}`}
+                tone="warn"
+                icon="⚡"
+              />
             )}
-          </View>
+            <Badge
+              label={
+                daysUntil < 0
+                  ? `${Math.abs(daysUntil)} gün gecikti`
+                  : formatRelativeDays(daysUntil)
+              }
+              tone={daysUntil < 0 ? 'danger' : daysUntil <= 3 ? 'warn' : 'neutral'}
+              icon="⏱"
+            />
+          </BadgeRow>
         </View>
       ) : (
         <View style={styles.renewalRow}>
@@ -532,14 +551,6 @@ const styles = StyleSheet.create({
   cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, flexShrink: 1 },
   cardSubtitle: { fontSize: 13, color: COLORS.dim },
-  trialBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    backgroundColor: 'rgba(34,197,94,0.18)',
-  },
-  trialBadgeText: { fontSize: 9, fontWeight: '800', color: COLORS.success, letterSpacing: 0.5 },
-
   priceBlock: { alignItems: 'flex-end' },
   priceText: { fontSize: 17, fontWeight: '800', color: COLORS.text },
   priceCycle: { fontSize: 11, color: COLORS.dimmest, marginTop: -2 },
@@ -556,10 +567,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   progressFill: { height: '100%', borderRadius: 999 },
-  contractMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  contractText: { fontSize: 12.5, fontWeight: '600' },
-  penaltyText: { fontSize: 12, color: COLORS.dim },
-
   // ── Yenileme ──
   renewalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   renewalText: { fontSize: 13, fontWeight: '600' },
