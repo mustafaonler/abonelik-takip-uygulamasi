@@ -24,6 +24,37 @@ const SUPPORTED = Platform.OS === 'ios' || Platform.OS === 'android';
 
 const ANDROID_CHANNEL_ID = 'subtrack-reminders';
 
+/**
+ * Hatırlatma saati. Gece yarısı düşen bildirim fark edilmiyor; sabah 10:00
+ * makul bir uzlaşma.
+ */
+const REMINDER_HOUR = 10;
+
+/**
+ * Hesaplanan an çoktan geçmişse bildirimi bu kadar saniye sonra gönderiyoruz.
+ * 0 değil: kaydetme akışı bitmeden bildirim düşerse kullanıcı formu kapatırken
+ * ekranın üstünde beliriyor, hangi kayda ait olduğu karışıyor.
+ */
+const IMMEDIATE_DELAY_SECONDS = 10;
+
+// ── Ön plan davranışı ──────────────────────────────────────────────────────
+// Modül seviyesinde: handler'ın herhangi bir bileşen mount olmadan ÖNCE
+// kayıtlı olması gerekiyor, yoksa uygulama açılırken düşen bir bildirim
+// varsayılan davranışa (ön planda gösterilmeme) takılır.
+//
+// SDK 57: shouldShowAlert @deprecated ve opsiyonel; shouldShowBanner ve
+// shouldShowList ZORUNLU. Eski anahtarı eklemek işe yaramaz.
+if (SUPPORTED) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
+
 /** subscription.id → kurulmuş bildirim id'leri. */
 const STORAGE_KEY = 'subtrack:reminder-ids';
 
@@ -54,16 +85,8 @@ export interface ReminderSubscription {
 export async function configureNotifications(): Promise<void> {
   if (!SUPPORTED) return;
 
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      // SDK 57: shouldShowAlert yerine bu ikisi.
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
-
+  // Handler modül seviyesinde kuruldu (yukarı bak); burada yalnızca async
+  // olması gereken kanal kurulumu kalıyor.
   if (Platform.OS === 'android') {
     // Android 8+ kanal olmadan bildirim göstermiyor.
     await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
@@ -136,16 +159,44 @@ async function writeIdMap(map: Record<string, string[]>): Promise<void> {
 
 // ── Zamanlama ──────────────────────────────────────────────────────────────
 
-/** Hatırlatma anı: hedef tarihten reminderDays gün önce, sabah 10:00. */
-function reminderMoment(targetISO: string, reminderDays: number): Date | null {
+/** Bir bildirimin ne zaman kurulacağına dair karar. */
+type SchedulePlan =
+  | { kind: 'at'; date: Date }
+  | { kind: 'soon'; seconds: number }
+  | { kind: 'skip'; reason: string };
+
+/**
+ * Hatırlatma zamanını hesaplar.
+ *
+ * Kural, kaçırmamak üzerine kurulu:
+ *   1. Hedef gün tamamen geçtiyse → atla. Ödemesi dünkü bir abonelik için
+ *      bugün "3 gün sonra ödeme var" demek yanlış olur.
+ *   2. Hedef gün hâlâ önümüzdeyse ama hatırlatma anı (hedef − N gün, 10:00)
+ *      geçmişse → HEMEN gönder. Eski davranış burada bildirimi sessizce
+ *      atlıyordu: 5 Ağustos 15:35'te, 8 Ağustos ödemesi için 3 günlük
+ *      hatırlatma "5 Ağustos 10:00"a denk geliyor ve hiç kurulmuyordu.
+ *   3. Hatırlatma anı gelecekteyse → o ana kur.
+ */
+function planReminder(targetISO: string, reminderDays: number): SchedulePlan {
   const target = parseISODate(targetISO);
-  if (!target) return null;
+  if (!target) return { kind: 'skip', reason: 'tarih çözümlenemedi' };
+
+  const now = Date.now();
+
+  // Hedef günün SONU: ödeme günü henüz bitmediyse hatırlatmak hâlâ anlamlı.
+  const targetEnd = new Date(target);
+  targetEnd.setHours(23, 59, 59, 999);
+  if (targetEnd.getTime() < now) {
+    return { kind: 'skip', reason: 'hedef tarih geçmiş' };
+  }
 
   const moment = new Date(target);
   moment.setDate(moment.getDate() - reminderDays);
-  // Gece yarısı yerine sabah: 00:00'da gelen bildirim fark edilmiyor.
-  moment.setHours(10, 0, 0, 0);
-  return moment;
+  moment.setHours(REMINDER_HOUR, 0, 0, 0);
+
+  if (moment.getTime() > now) return { kind: 'at', date: moment };
+
+  return { kind: 'soon', seconds: IMMEDIATE_DELAY_SECONDS };
 }
 
 /**
@@ -155,9 +206,8 @@ function reminderMoment(targetISO: string, reminderDays: number): Date | null {
  * böylece güncelleme sonrası kullanıcı hem eski hem yeni tarih için bildirim
  * almaz.
  *
- * Geçmişte kalan tarihler atlanır: expo geçmiş bir tarihe kurulan bildirimi
- * anında gösteriyor, kullanıcı abonelik kaydeder kaydetmez alakasız bir uyarı
- * görürdü.
+ * Zamanlama kuralı için bkz. planReminder(): hatırlatma anı geçmiş ama hedef
+ * tarih hâlâ önümüzdeyse bildirim atlanmaz, hemen gönderilir.
  *
  * @param reminderDays Kaç gün önce hatırlatılacağı. Çağıran taraf aboneliğin
  *   kendi `reminder_days_before` değerini geçer; o yoksa hesap varsayılanı
@@ -175,25 +225,29 @@ export async function scheduleSubscriptionReminder(
   const granted = await ensureNotificationPermission();
   if (!granted) return 0;
 
-  const now = Date.now();
   const amount = formatCurrency(subscription.price, subscription.currency);
   const scheduled: string[] = [];
 
-  const jobs: { at: Date | null; title: string; body: string; kind: ReminderData['kind'] }[] = [
+  const jobs: {
+    plan: SchedulePlan;
+    title: string;
+    body: string;
+    kind: ReminderData['kind'];
+  }[] = [
     {
-      at: reminderMoment(subscription.next_payment_date, reminderDays),
+      plan: planReminder(subscription.next_payment_date, reminderDays),
       title: `${subscription.name} · ${amount}`,
       body:
         reminderDays === 0
           ? 'Ödeme bugün.'
-          : `Ödeme ${reminderDays} gün sonra (${formatDate(subscription.next_payment_date, true)}).`,
+          : `Ödeme tarihi ${formatDate(subscription.next_payment_date, true)}.`,
       kind: 'payment',
     },
   ];
 
   if (subscription.contract_end_date) {
     jobs.push({
-      at: reminderMoment(subscription.contract_end_date, reminderDays),
+      plan: planReminder(subscription.contract_end_date, reminderDays),
       title: `${subscription.name} taahhüdü bitiyor`,
       body: `Taahhüt bitişi ${formatDate(subscription.contract_end_date, true)}. Cayma bedeli olmadan çıkabilirsin.`,
       kind: 'contract',
@@ -201,7 +255,28 @@ export async function scheduleSubscriptionReminder(
   }
 
   for (const job of jobs) {
-    if (!job.at || job.at.getTime() <= now) continue;
+    if (job.plan.kind === 'skip') {
+      console.log(`[notifications] ${job.kind} atlandı: ${job.plan.reason}`);
+      continue;
+    }
+
+    // Android'de kanal her iki tetikleyici tipinde de trigger üzerinden veriliyor.
+    const channel = Platform.OS === 'android' ? { channelId: ANDROID_CHANNEL_ID } : {};
+
+    const trigger: Notifications.NotificationTriggerInput =
+      job.plan.kind === 'at'
+        ? {
+            // SDK 57: tetikleyici tipli olmak zorunda.
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: job.plan.date,
+            ...channel,
+          }
+        : {
+            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+            seconds: job.plan.seconds,
+            repeats: false,
+            ...channel,
+          };
 
     try {
       const id = await Notifications.scheduleNotificationAsync({
@@ -210,14 +285,16 @@ export async function scheduleSubscriptionReminder(
           body: job.body,
           data: { subscriptionId: subscription.id, kind: job.kind } satisfies ReminderData,
         },
-        trigger: {
-          // SDK 57: tetikleyici tipli olmak zorunda.
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: job.at,
-          ...(Platform.OS === 'android' ? { channelId: ANDROID_CHANNEL_ID } : {}),
-        },
+        trigger,
       });
       scheduled.push(id);
+
+      console.log(
+        `[notifications] ${job.kind} kuruldu:`,
+        job.plan.kind === 'at'
+          ? job.plan.date.toLocaleString('tr-TR')
+          : `${job.plan.seconds} sn sonra (hatırlatma anı geçmişti)`,
+      );
     } catch (err) {
       console.error('[notifications] Bildirim kurulamadı:', err);
     }
@@ -252,6 +329,31 @@ export async function cancelSubscriptionReminders(subscriptionId: string): Promi
 
   delete map[subscriptionId];
   await writeIdMap(map);
+}
+
+/**
+ * Şu an kurulu olan bildirimleri okunur biçimde döndürür — test/teşhis içindir.
+ * Ayarlar ekranından ya da konsoldan çağrılabilir.
+ */
+export async function listScheduledReminders(): Promise<
+  { id: string; title: string; when: string }[]
+> {
+  if (!SUPPORTED) return [];
+
+  const items = await Notifications.getAllScheduledNotificationsAsync();
+
+  return items.map((item) => {
+    const trigger = item.trigger as { type?: string; value?: number; seconds?: number } | null;
+    let when = 'bilinmiyor';
+
+    if (trigger?.type === 'date' && typeof trigger.value === 'number') {
+      when = new Date(trigger.value).toLocaleString('tr-TR');
+    } else if (trigger?.type === 'timeInterval' && typeof trigger.seconds === 'number') {
+      when = `${trigger.seconds} sn sonra`;
+    }
+
+    return { id: item.identifier, title: item.content.title ?? '(başlıksız)', when };
+  });
 }
 
 /** Çıkış yaparken: başka hesabın bildirimleri bu cihazda kalmasın. */
