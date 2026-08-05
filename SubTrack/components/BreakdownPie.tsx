@@ -25,6 +25,33 @@ import type { BreakdownSlice } from '../hooks/useDashboard';
 
 const CHART_HEIGHT = 200;
 
+// Pasta yarıçapı kütüphanede sabit: R = height / 2.5 → 80px (çap 160).
+const PIE_RADIUS = CHART_HEIGHT / 2.5;
+
+// Halka kalınlığı 28 → 14: delik büyüdükçe ortadaki tutar kenarlara değmeden
+// okunuyor. Delik çapını yarıçaptan türetiyoruz ki ikisi birbirinden kaymasın.
+const RING_THICKNESS = 14;
+const HOLE_SIZE = (PIE_RADIUS - RING_THICKNESS) * 2; // → 132
+
+/** Deliğin yazıya bıraktığı gerçek genişlik (iki yandan iç boşluk düşülmüş). */
+const HOLE_INNER_WIDTH = HOLE_SIZE - 24;
+
+/**
+ * Tutarı deliğe sığdıran punto. Ölçüm yapamadığımız için karakter sayısından
+ * gidiyoruz: bu ağırlıkta ~0.58em ortalama karakter genişliği tutuyor
+ * ("₺1.234,56" gibi rakam ağırlıklı dizelerde).
+ *
+ * adjustsFontSizeToFit tek başına yeterli değil: iOS'ta çalışıyor, Android ve
+ * web'de güvenilmez. Bu yüzden puntoyu baştan doğru seçip onu yalnızca emniyet
+ * kemeri olarak bırakıyoruz.
+ */
+function fitFontSize(text: string): number {
+  const maxSize = 20;
+  const minSize = 12;
+  const estimated = HOLE_INNER_WIDTH / (text.length * 0.58);
+  return Math.max(minSize, Math.min(maxSize, Math.floor(estimated)));
+}
+
 export function BreakdownPie({
   slices,
   width,
@@ -39,6 +66,7 @@ export function BreakdownPie({
   if (slices.length === 0) return null;
 
   const total = slices.reduce((sum, s) => sum + s.amount, 0);
+  const totalText = formatCurrency(total, 'TRY');
 
   const data = slices.map((s) => ({
     name: s.name,
@@ -72,8 +100,13 @@ export function BreakdownPie({
             (r: 0 sabit), bu yüzden üstüne bindiriyoruz. */}
         <View style={styles.donutHole} pointerEvents="none">
           <Text style={styles.holeLabel}>{centerLabel}</Text>
-          <Text style={styles.holeValue} numberOfLines={1} adjustsFontSizeToFit>
-            {formatCurrency(total, 'TRY')}
+          <Text
+            style={[styles.holeValue, { fontSize: fitFontSize(totalText) }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.7}
+          >
+            {totalText}
           </Text>
         </View>
       </View>
@@ -101,8 +134,6 @@ export function BreakdownPie({
   );
 }
 
-const HOLE_SIZE = 104;
-
 const styles = StyleSheet.create({
   wrap: { marginTop: 4 },
   chartRow: { alignItems: 'center', justifyContent: 'center' },
@@ -126,7 +157,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     fontWeight: '700',
   },
-  holeValue: { fontSize: 17, fontWeight: '800', color: COLORS.text, marginTop: 2 },
+  // fontSize çalışma anında fitFontSize() ile veriliyor.
+  holeValue: { fontWeight: '800', color: COLORS.text, marginTop: 2 },
 
   legend: { marginTop: 14, gap: 2 },
   legendRow: {

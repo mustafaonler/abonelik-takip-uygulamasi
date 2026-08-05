@@ -1,7 +1,8 @@
 import { Tabs, router } from 'expo-router';
 import { View, TouchableOpacity, Text, StyleSheet, type ColorValue } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { supabase } from '../../lib/supabase';
+import { ChartPie, House, Plus, Settings, type LucideIcon } from '../../lib/icons';
+import { useCurrentUser, greetingForHour } from '../../hooks/useCurrentUser';
 import { COLORS, RADIUS } from '../../lib/theme';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -29,11 +30,6 @@ const TAB_CONTENT_HEIGHT = 78;
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.replace('/(auth)/login');
-  };
-
   return (
     <Tabs
       screenOptions={{
@@ -59,21 +55,17 @@ export default function TabsLayout() {
         // sekmenin var olduğu bile zor fark ediliyordu.
         tabBarInactiveTintColor: COLORS.muted,
 
-        headerRight: () => (
-          <TouchableOpacity onPress={handleSignOut} style={styles.signOut}>
-            <Text style={styles.signOutText}>Çıkış</Text>
-          </TouchableOpacity>
-        ),
+        headerRight: () => <SettingsButton />,
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Aboneliklerim',
-          // İkon kütüphanesi kurulu değil; uygulama zaten kategorilerde emoji
-          // kullanıyor, aynı dili sürdürüyoruz (ek bağımlılık ve font yükü yok).
+          // Sabit "Aboneliklerim" başlığı kaldırıldı: aynı metin sayfanın
+          // içindeki liste başlığında zaten var, tekrar ediyordu.
+          headerTitle: () => <GreetingTitle />,
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon glyph="◉" color={color} focused={focused} />
+            <TabIcon Icon={House} color={color} focused={focused} />
           ),
           tabBarLabel: ({ color }) => <TabLabel text="Ana Sayfa" color={color} />,
         }}
@@ -83,7 +75,7 @@ export default function TabsLayout() {
         options={{
           title: 'Analizler',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon glyph="◔" color={color} focused={focused} />
+            <TabIcon Icon={ChartPie} color={color} focused={focused} />
           ),
           tabBarLabel: ({ color }) => <TabLabel text="Analizler" color={color} />,
         }}
@@ -93,7 +85,7 @@ export default function TabsLayout() {
         options={{
           title: 'Yeni Ekle',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon glyph="＋" color={color} focused={focused} />
+            <TabIcon Icon={Plus} color={color} focused={focused} />
           ),
           tabBarLabel: ({ color }) => <TabLabel text="Ekle" color={color} />,
         }}
@@ -102,22 +94,52 @@ export default function TabsLayout() {
   );
 }
 
+/**
+ * Ana sayfa başlığı: saate ve kullanıcının adına göre karşılama.
+ * İsim gelmeden önce yalnızca karşılamayı gösteriyoruz — "Merhaba, undefined"
+ * ya da bir anlık boşluk yerine cümle her durumda tam kalsın.
+ */
+function GreetingTitle() {
+  const { user } = useCurrentUser();
+  const greeting = greetingForHour();
+
+  return (
+    <Text style={styles.greeting} numberOfLines={1}>
+      {user?.firstName ? `${greeting}, ${user.firstName} 👋` : `${greeting} 👋`}
+    </Text>
+  );
+}
+
+function SettingsButton() {
+  return (
+    <TouchableOpacity
+      onPress={() => router.push('/settings')}
+      style={styles.headerButton}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      accessibilityRole="button"
+      accessibilityLabel="Ayarlar"
+    >
+      <Settings size={22} color={COLORS.primaryLight} strokeWidth={2} />
+    </TouchableOpacity>
+  );
+}
+
 // Aktif sekmenin arkasına mor bir hap koyuyoruz: renk farkı tek başına koyu
 // zeminde zayıf kalıyordu, dolgu hangi sekmede olduğunu bir bakışta belli ediyor.
 function TabIcon({
-  glyph,
+  Icon,
   color,
   focused,
 }: {
-  glyph: string;
+  Icon: LucideIcon;
   color: ColorValue;
   focused: boolean;
 }) {
   return (
     <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
-      <Text style={[styles.tabIcon, { color }]} allowFontScaling={false}>
-        {glyph}
-      </Text>
+      {/* lucide `color` prop'u string bekliyor; tabBarIcon ColorValue veriyor.
+          Pratikte hep hex geliyor, tip uyumu için daraltıyoruz. */}
+      <Icon size={22} color={String(color)} strokeWidth={focused ? 2.4 : 2} />
     </View>
   );
 }
@@ -131,8 +153,8 @@ function TabLabel({ text, color }: { text: string; color: ColorValue }) {
 }
 
 const styles = StyleSheet.create({
-  signOut: { marginRight: 16, paddingVertical: 6, paddingHorizontal: 4 },
-  signOutText: { color: COLORS.primaryLight, fontWeight: '600', fontSize: 14 },
+  headerButton: { marginRight: 16, padding: 4 },
+  greeting: { fontSize: 17, fontWeight: '700', color: COLORS.text },
 
   tabIconWrap: {
     minWidth: 60,
