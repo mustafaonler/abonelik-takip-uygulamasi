@@ -39,6 +39,14 @@ export function toErrorMessage(err: unknown): string {
         'dosyaları henüz çalıştırılmamış olabilir (bkz. supabase/README.md).'
       );
 
+    // Kolon yok — migration çalıştırılmamış (şema kodun gerisinde kalmış)
+    case '42703':
+      return (
+        'Veritabanı şeması güncel değil: ' +
+        (raw || 'beklenen bir kolon bulunamadı') +
+        '. supabase/migrations altındaki son SQL dosyasını çalıştırman gerekiyor.'
+      );
+
     // Yetki reddedildi — GRANT veya RLS politikası eksik
     case '42501':
       return (

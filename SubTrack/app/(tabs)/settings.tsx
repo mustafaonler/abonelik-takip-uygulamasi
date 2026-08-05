@@ -46,8 +46,14 @@ function reminderLabel(days: number): string {
 
 export default function SettingsScreen() {
   const { user, loading: userLoading } = useCurrentUser();
-  const { reminderDays, loading: settingsLoading, saving, error, setReminderDays } =
-    useUserSettings();
+  const {
+    reminderDays,
+    loading: settingsLoading,
+    saving,
+    error,
+    migrationPending,
+    setReminderDays,
+  } = useUserSettings();
 
   const [permission, setPermission] = useState<{
     supported: boolean;
@@ -150,7 +156,7 @@ export default function SettingsScreen() {
                 abonelik formundan değiştirebilirsin.
               </Text>
 
-              <View style={styles.optionRow}>
+              <View style={[styles.optionRow, migrationPending && styles.optionRowDisabled]}>
                 {REMINDER_OPTIONS.map((days) => {
                   const selected = reminderDays === days;
                   return (
@@ -158,10 +164,10 @@ export default function SettingsScreen() {
                       key={days}
                       style={[styles.option, selected && styles.optionSelected]}
                       onPress={() => void setReminderDays(days)}
-                      disabled={saving}
+                      disabled={saving || migrationPending}
                       activeOpacity={0.8}
                       accessibilityRole="radio"
-                      accessibilityState={{ selected }}
+                      accessibilityState={{ selected, disabled: migrationPending }}
                     >
                       <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
                         {reminderLabel(days)}
@@ -170,6 +176,23 @@ export default function SettingsScreen() {
                   );
                 })}
               </View>
+
+              {/* Kolon yoksa seçici kilitli: "seçtim ama kaydolmadı" durumunu
+                  yaşatmak yerine ne yapılması gerektiğini söylüyoruz. */}
+              {migrationPending && (
+                <View style={styles.warnBoxInline}>
+                  <Text style={styles.warnText}>
+                    Bu ayar için veritabanı güncellemesi bekleniyor.
+                    {'\n'}Supabase SQL Editor'da şunu çalıştır:
+                    {'\n\n'}
+                    <Text style={styles.code}>
+                      alter table public.users add column if not exists reminder_days smallint not
+                      null default 3;
+                    </Text>
+                    {'\n\n'}Tam dosya: supabase/migrations/20260805120000_users_reminder_days.sql
+                  </Text>
+                </View>
+              )}
 
               {saving && <Text style={styles.savingText}>Kaydediliyor…</Text>}
               {error && <Text style={styles.inlineError}>{error}</Text>}
@@ -325,6 +348,7 @@ const styles = StyleSheet.create({
   cardHint: { fontSize: 12.5, color: COLORS.dim, lineHeight: 19, marginTop: 8 },
 
   optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+  optionRowDisabled: { opacity: 0.45 },
   option: {
     paddingHorizontal: 14,
     paddingVertical: 9,
@@ -358,6 +382,19 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   warnText: { color: COLORS.warn, fontSize: 12.5, lineHeight: 19 },
+  warnBoxInline: {
+    backgroundColor: 'rgba(245,158,11,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.4)',
+    borderRadius: RADIUS.md,
+    padding: 13,
+    marginTop: 14,
+  },
+  code: {
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 11.5,
+    color: COLORS.text,
+  },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 15 },
   rowLabel: { fontSize: 14.5, color: COLORS.text, flexShrink: 0 },
