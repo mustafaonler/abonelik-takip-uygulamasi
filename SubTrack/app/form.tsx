@@ -34,6 +34,11 @@ import { PENALTY_OPTIONS, calculateEarlyTerminationFee } from '../lib/contract';
 import { useServiceTemplates } from '../hooks/useServiceTemplates';
 import { useSubscriptionRecord, type SubscriptionRecord } from '../hooks/useSubscriptionRecord';
 import { useSubscriptionMutations } from '../hooks/useSubscriptionMutations';
+import { useUserSettings } from '../hooks/useUserSettings';
+import {
+  cancelSubscriptionReminders,
+  scheduleSubscriptionReminder,
+} from '../utils/notifications';
 import type {
   BillingCycle,
   Category,
@@ -90,7 +95,11 @@ export default function SubscriptionFormScreen() {
     ? (catalog.templates.find((t) => t.id === templateId) ?? null)
     : null;
 
-  const loading = catalog.loading || record.loading;
+  // Hesap geneli hatırlatma varsayılanı — yeni abonelik formunu ön-doldurur.
+  // Düzenlemede aboneliğin kendi değeri kullanılır, bu değere bakılmaz.
+  const settings = useUserSettings();
+
+  const loading = catalog.loading || record.loading || settings.loading;
   const error = catalog.error ?? record.error;
 
   const screenTitle = isEdit ? 'Aboneliği Düzenle' : 'Yeni Abonelik';
@@ -171,6 +180,7 @@ export default function SubscriptionFormScreen() {
         template={template}
         record={record.record}
         categories={catalog.categories}
+        defaultReminderDays={settings.reminderDays}
         onDone={() => router.replace('/(tabs)')}
       />
     </>
@@ -185,11 +195,14 @@ function SubscriptionForm({
   template,
   record,
   categories,
+  defaultReminderDays,
   onDone,
 }: {
   template: ServiceTemplate | null;
   record: SubscriptionRecord | null;
   categories: Category[];
+  /** Ayarlar'daki hesap varsayılanı — yalnızca yeni kayıtta kullanılır. */
+  defaultReminderDays: number;
   onDone: () => void;
 }) {
   const existing = record?.subscription ?? null;
@@ -232,7 +245,7 @@ function SubscriptionForm({
     existing?.payment_method ?? null,
   );
   const [reminderDays, setReminderDays] = useState(
-    String(existing?.reminder_days_before ?? 3),
+    String(existing?.reminder_days_before ?? defaultReminderDays),
   );
   const [notes, setNotes] = useState(existing?.notes ?? '');
 
@@ -403,11 +416,30 @@ function SubscriptionForm({
     };
 
     try {
-      if (isEdit && existing) {
-        await updateSubscription(existing.id, payload);
-      } else {
-        await addSubscription(payload);
+      const savedId =
+        isEdit && existing
+          ? (await updateSubscription(existing.id, payload), existing.id)
+          : await addSubscription(payload);
+
+      // Hatırlatıcı kurulumu kaydın BAŞARISINI etkilemez: izin reddedilmiş
+      // olabilir ya da platform desteklemiyor olabilir (web). Abonelik yazıldı,
+      // kullanıcıyı hata ekranında tutmanın anlamı yok — sadece logluyoruz.
+      try {
+        await scheduleSubscriptionReminder(
+          {
+            id: savedId,
+            name: payload.subscription.name,
+            price: payload.subscription.price,
+            currency: payload.subscription.currency,
+            next_payment_date: payload.subscription.next_payment_date,
+            contract_end_date: payload.contract?.end_date ?? null,
+          },
+          payload.subscription.reminder_days_before,
+        );
+      } catch (notifyErr: unknown) {
+        console.error('[form] Hatırlatıcı kurulamadı:', notifyErr);
       }
+
       onDone();
     } catch (err: unknown) {
       setFormError(toErrorMessage(err));
@@ -419,6 +451,9 @@ function SubscriptionForm({
     if (!existing) return;
     try {
       await deleteSubscription(existing.id);
+      // Kayıt gitti; kurulu bildirimler kalırsa kullanıcı olmayan bir
+      // aboneliğin ödeme uyarısını alır.
+      await cancelSubscriptionReminders(existing.id);
       setConfirmDelete(false);
       onDone();
     } catch (err: unknown) {

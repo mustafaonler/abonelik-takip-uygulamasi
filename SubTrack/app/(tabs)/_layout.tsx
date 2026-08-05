@@ -1,5 +1,5 @@
-import { Tabs, router } from 'expo-router';
-import { View, TouchableOpacity, Text, StyleSheet, type ColorValue } from 'react-native';
+import { Tabs } from 'expo-router';
+import { View, Text, StyleSheet, type ColorValue } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartPie, House, Plus, Settings, type LucideIcon } from '../../lib/icons';
 import { useCurrentUser, greetingForHour } from '../../hooks/useCurrentUser';
@@ -55,7 +55,6 @@ export default function TabsLayout() {
         // sekmenin var olduğu bile zor fark ediliyordu.
         tabBarInactiveTintColor: COLORS.muted,
 
-        headerRight: () => <SettingsButton />,
       }}
     >
       <Tabs.Screen
@@ -90,6 +89,16 @@ export default function TabsLayout() {
           tabBarLabel: ({ color }) => <TabLabel text="Ekle" color={color} />,
         }}
       />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Ayarlar',
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon Icon={Settings} color={color} focused={focused} />
+          ),
+          tabBarLabel: ({ color }) => <TabLabel text="Ayarlar" color={color} />,
+        }}
+      />
     </Tabs>
   );
 }
@@ -107,20 +116,6 @@ function GreetingTitle() {
     <Text style={styles.greeting} numberOfLines={1}>
       {user?.firstName ? `${greeting}, ${user.firstName} 👋` : `${greeting} 👋`}
     </Text>
-  );
-}
-
-function SettingsButton() {
-  return (
-    <TouchableOpacity
-      onPress={() => router.push('/settings')}
-      style={styles.headerButton}
-      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-      accessibilityRole="button"
-      accessibilityLabel="Ayarlar"
-    >
-      <Settings size={22} color={COLORS.primaryLight} strokeWidth={2} />
-    </TouchableOpacity>
   );
 }
 
@@ -153,7 +148,6 @@ function TabLabel({ text, color }: { text: string; color: ColorValue }) {
 }
 
 const styles = StyleSheet.create({
-  headerButton: { marginRight: 16, padding: 4 },
   greeting: { fontSize: 17, fontWeight: '700', color: COLORS.text },
 
   tabIconWrap: {

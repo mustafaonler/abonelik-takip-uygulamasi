@@ -2,6 +2,7 @@ import { Stack, router } from 'expo-router';
 import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
+import { configureNotifications } from '../utils/notifications';
 import type { Session } from '@supabase/supabase-js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,6 +36,11 @@ async function syncUserToDatabase(session: Session): Promise<void> {
 }
 
 export default function RootLayout() {
+  // Bildirim handler'ı ve Android kanalı bir kez kurulur. Web'de no-op.
+  useEffect(() => {
+    void configureNotifications();
+  }, []);
+
   useEffect(() => {
     // ── Tüm oturum yönetimi onAuthStateChange üzerinden yapılır ──────────────
     //

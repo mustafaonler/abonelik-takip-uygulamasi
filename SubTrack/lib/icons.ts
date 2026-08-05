@@ -14,6 +14,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 export { default as House } from 'lucide-react-native/icons/house';
+export { default as BellRing } from 'lucide-react-native/icons/bell-ring';
 export { default as ChartPie } from 'lucide-react-native/icons/chart-pie';
 export { default as Plus } from 'lucide-react-native/icons/plus';
 export { default as Settings } from 'lucide-react-native/icons/settings';
