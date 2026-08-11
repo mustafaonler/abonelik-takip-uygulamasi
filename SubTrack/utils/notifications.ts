@@ -1,26 +1,83 @@
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { formatCurrency, formatDate, parseISODate } from '../lib/format';
 import type { Currency } from '../types';
 
+// Yalnızca TİP importu — derlemede silinir, çalışma anında paket yüklenmez.
+// Statik import kullanmak Expo Go'da uygulamayı komple çökertiyor (aşağıya bak).
+import type * as NotificationsModule from 'expo-notifications';
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Yerel hatırlatıcılar — expo-notifications (SDK 57)
 //
-// SDK 57 notları:
-//  • setNotificationHandler'da shouldShowAlert KALDIRILDI; yerine
-//    shouldShowBanner + shouldShowList geldi.
-//  • Zamanlama tetikleyicisi artık tipli:
-//    { type: SchedulableTriggerInputTypes.DATE, date }
-//  • Uzak bildirim (push) Expo Go'da SDK 53'ten beri çalışmıyor ama YEREL
-//    bildirim çalışıyor — bu dosya yalnızca yerel bildirim kuruyor.
+// ⚠ EXPO GO'DA PAKETİ IMPORT ETMEK UYGULAMAYI ÇÖKERTİYOR
+// Android'de Expo Go, expo-notifications yüklenir yüklenmez şunu fırlatıyor:
+//   "Android Push notifications (remote notifications) ... was removed from
+//    Expo Go with the release of SDK 53. Use a development build instead."
+// Hata import satırında oluşuyor; app/_layout.tsx değerlendirilemiyor ve
+// expo-router route modülünü undefined alıp "Cannot read property
+// 'ErrorBoundary' of undefined" ile ikinci kez patlıyor. Yani sadece
+// bildirimler değil, TÜM uygulama açılmıyor.
 //
-// Web: expo-notifications'ın zamanlama tarafının web karşılığı yok (paket
-// içinde scheduleNotificationAsync.web.js bulunmuyor), çağırmak native modüle
-// düşüp hata veriyor. Bu yüzden web'de tüm fonksiyonlar sessizce no-op.
+// Dokümanın "yerel bildirimler Expo Go'da çalışmaya devam ediyor" ifadesi
+// yanıltıcı: modülü yüklemek bile mümkün değil, dolayısıyla yerel bildirim de
+// kullanılamıyor. Gerçek çözüm development build.
+//
+// Bu yüzden paket STATİK olarak import edilmiyor; yalnızca desteklenen
+// ortamda require() ile yükleniyor. Desteklenmeyen ortamda (web, Expo Go)
+// tüm fonksiyonlar sessizce no-op — uygulamanın geri kalanı çalışmaya devam
+// ediyor ve Ayarlar ekranı kullanıcıya sebebini söylüyor.
+//
+// SDK 57 notları:
+//  • setNotificationHandler'da shouldShowAlert @deprecated; zorunlu alanlar
+//    shouldShowBanner + shouldShowList.
+//  • Tetikleyici tipli olmak zorunda:
+//    { type: SchedulableTriggerInputTypes.DATE, date }
 // ═══════════════════════════════════════════════════════════════════════════
 
-const SUPPORTED = Platform.OS === 'ios' || Platform.OS === 'android';
+/** Bildirimlerin neden kullanılamadığı — Ayarlar ekranı bunu gösteriyor. */
+export type NotificationAvailability = 'available' | 'web' | 'expo-go';
+
+const IS_NATIVE = Platform.OS === 'ios' || Platform.OS === 'android';
+
+/**
+ * Expo Go içinde miyiz? SDK 50+ için önerilen kontrol bu;
+ * Constants.appOwnership kullanımdan kaldırılıyor.
+ */
+const IS_EXPO_GO =
+  Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
+export const notificationAvailability: NotificationAvailability = !IS_NATIVE
+  ? 'web'
+  : IS_EXPO_GO
+    ? 'expo-go'
+    : 'available';
+
+const SUPPORTED = notificationAvailability === 'available';
+
+/**
+ * Paketi ilk ihtiyaçta yükler. Desteklenmeyen ortamda null döner ve ASLA
+ * require() çağırmaz — çökme tam olarak orada oluşuyor.
+ */
+let cached: typeof NotificationsModule | null = null;
+let loadFailed = false;
+
+function getNotifications(): typeof NotificationsModule | null {
+  if (!SUPPORTED || loadFailed) return null;
+  if (cached) return cached;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    cached = require('expo-notifications') as typeof NotificationsModule;
+    return cached;
+  } catch (err) {
+    // Beklenmedik bir ortam: bir kez logla, sonra sessizce devre dışı kal.
+    loadFailed = true;
+    console.error('[notifications] Paket yüklenemedi:', err);
+    return null;
+  }
+}
 
 const ANDROID_CHANNEL_ID = 'subtrack-reminders';
 
@@ -44,8 +101,9 @@ const IMMEDIATE_DELAY_SECONDS = 10;
 //
 // SDK 57: shouldShowAlert @deprecated ve opsiyonel; shouldShowBanner ve
 // shouldShowList ZORUNLU. Eski anahtarı eklemek işe yaramaz.
-if (SUPPORTED) {
-  Notifications.setNotificationHandler({
+{
+  const N = getNotifications();
+  N?.setNotificationHandler({
     handleNotification: async () => ({
       shouldPlaySound: true,
       shouldSetBadge: false,
@@ -83,15 +141,24 @@ export interface ReminderSubscription {
  * Bildirim ön plandayken de görünsün diye handler, Android'de kanal kurar.
  */
 export async function configureNotifications(): Promise<void> {
-  if (!SUPPORTED) return;
+  const N = getNotifications();
+  if (!N) {
+    if (notificationAvailability === 'expo-go') {
+      console.warn(
+        '[notifications] Expo Go içindesin: expo-notifications yüklenemiyor, ' +
+          'hatırlatıcılar devre dışı. Test için development build gerekiyor.',
+      );
+    }
+    return;
+  }
 
   // Handler modül seviyesinde kuruldu (yukarı bak); burada yalnızca async
   // olması gereken kanal kurulumu kalıyor.
   if (Platform.OS === 'android') {
     // Android 8+ kanal olmadan bildirim göstermiyor.
-    await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
+    await N.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
       name: 'Abonelik hatırlatıcıları',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: N.AndroidImportance.DEFAULT,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#7c3aed',
     });
@@ -104,16 +171,19 @@ export async function configureNotifications(): Promise<void> {
  * bildirim kurulamaması abonelik kaydını başarısız saymaz.
  */
 export async function ensureNotificationPermission(): Promise<boolean> {
-  if (!SUPPORTED) return false;
+  const N = getNotifications();
+  if (!N) return false;
 
-  const current = await Notifications.getPermissionsAsync();
+  const current = await N.getPermissionsAsync();
   if (current.granted) return true;
 
   // canAskAgain false ise sistem diyaloğu bir daha açılmaz; kullanıcıyı
   // ayarlara yönlendirmek çağıranın işi.
   if (!current.canAskAgain) return false;
 
-  const result = await Notifications.requestPermissionsAsync({
+  // Android 13+ POST_NOTIFICATIONS izni bu çağrıyla isteniyor; paket izni
+  // kendi AndroidManifest'inde tanımlıyor, ek yapılandırma gerekmiyor.
+  const result = await N.requestPermissionsAsync({
     ios: { allowAlert: true, allowBadge: false, allowSound: true },
   });
   return result.granted;
@@ -122,14 +192,25 @@ export async function ensureNotificationPermission(): Promise<boolean> {
 /** İzin durumunu değiştirmeden okur — Ayarlar ekranı için. */
 export async function getNotificationPermissionStatus(): Promise<{
   supported: boolean;
+  /** Desteklenmiyorsa sebebi — ekranda ne yazacağını belirler. */
+  availability: NotificationAvailability;
   granted: boolean;
   canAskAgain: boolean;
 }> {
-  if (!SUPPORTED) return { supported: false, granted: false, canAskAgain: false };
+  const N = getNotifications();
+  if (!N) {
+    return {
+      supported: false,
+      availability: notificationAvailability,
+      granted: false,
+      canAskAgain: false,
+    };
+  }
 
-  const current = await Notifications.getPermissionsAsync();
+  const current = await N.getPermissionsAsync();
   return {
     supported: true,
+    availability: 'available',
     granted: current.granted,
     canAskAgain: current.canAskAgain,
   };
@@ -218,7 +299,8 @@ export async function scheduleSubscriptionReminder(
   subscription: ReminderSubscription,
   reminderDays: number,
 ): Promise<number> {
-  if (!SUPPORTED) return 0;
+  const N = getNotifications();
+  if (!N) return 0;
 
   await cancelSubscriptionReminders(subscription.id);
 
@@ -263,23 +345,23 @@ export async function scheduleSubscriptionReminder(
     // Android'de kanal her iki tetikleyici tipinde de trigger üzerinden veriliyor.
     const channel = Platform.OS === 'android' ? { channelId: ANDROID_CHANNEL_ID } : {};
 
-    const trigger: Notifications.NotificationTriggerInput =
+    const trigger: NotificationsModule.NotificationTriggerInput =
       job.plan.kind === 'at'
         ? {
             // SDK 57: tetikleyici tipli olmak zorunda.
-            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            type: N.SchedulableTriggerInputTypes.DATE,
             date: job.plan.date,
             ...channel,
           }
         : {
-            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+            type: N.SchedulableTriggerInputTypes.TIME_INTERVAL,
             seconds: job.plan.seconds,
             repeats: false,
             ...channel,
           };
 
     try {
-      const id = await Notifications.scheduleNotificationAsync({
+      const id = await N.scheduleNotificationAsync({
         content: {
           title: job.title,
           body: job.body,
@@ -311,7 +393,8 @@ export async function scheduleSubscriptionReminder(
 
 /** Aboneliğe ait tüm bildirimleri iptal eder (silme ve güncelleme öncesi). */
 export async function cancelSubscriptionReminders(subscriptionId: string): Promise<void> {
-  if (!SUPPORTED) return;
+  const N = getNotifications();
+  if (!N) return;
 
   const map = await readIdMap();
   const ids = map[subscriptionId];
@@ -319,7 +402,7 @@ export async function cancelSubscriptionReminders(subscriptionId: string): Promi
 
   await Promise.all(
     ids.map((id) =>
-      Notifications.cancelScheduledNotificationAsync(id).catch((err) => {
+      N.cancelScheduledNotificationAsync(id).catch((err) => {
         // Bildirim zaten gösterilmiş/iptal edilmiş olabilir; defterden
         // düşürmek yeterli, hata akışı durdurmasın.
         console.warn('[notifications] İptal edilemedi:', id, err);
@@ -338,9 +421,10 @@ export async function cancelSubscriptionReminders(subscriptionId: string): Promi
 export async function listScheduledReminders(): Promise<
   { id: string; title: string; when: string }[]
 > {
-  if (!SUPPORTED) return [];
+  const N = getNotifications();
+  if (!N) return [];
 
-  const items = await Notifications.getAllScheduledNotificationsAsync();
+  const items = await N.getAllScheduledNotificationsAsync();
 
   return items.map((item) => {
     const trigger = item.trigger as { type?: string; value?: number; seconds?: number } | null;
@@ -358,9 +442,10 @@ export async function listScheduledReminders(): Promise<
 
 /** Çıkış yaparken: başka hesabın bildirimleri bu cihazda kalmasın. */
 export async function cancelAllReminders(): Promise<void> {
-  if (!SUPPORTED) return;
+  const N = getNotifications();
+  if (!N) return;
   try {
-    await Notifications.cancelAllScheduledNotificationsAsync();
+    await N.cancelAllScheduledNotificationsAsync();
     await AsyncStorage.removeItem(STORAGE_KEY);
   } catch (err) {
     console.error('[notifications] Tümü iptal edilemedi:', err);

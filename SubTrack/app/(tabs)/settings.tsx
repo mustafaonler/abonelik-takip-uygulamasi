@@ -55,11 +55,10 @@ export default function SettingsScreen() {
     setReminderDays,
   } = useUserSettings();
 
-  const [permission, setPermission] = useState<{
-    supported: boolean;
-    granted: boolean;
-    canAskAgain: boolean;
-  } | null>(null);
+  // Tipi elle yazmak yerine kaynağından türetiyoruz; yardımcı fonksiyon
+  // değiştiğinde burası sessizce eskimesin.
+  const [permission, setPermission] =
+    useState<Awaited<ReturnType<typeof getNotificationPermissionStatus>> | null>(null);
 
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -202,8 +201,13 @@ export default function SettingsScreen() {
             {permission && !permission.supported ? (
               <View style={styles.noteBox}>
                 <Text style={styles.noteText}>
-                  Bildirimler yalnızca iOS ve Android'de çalışıyor. Web sürümünde
-                  hatırlatıcı kurulmuyor.
+                  {permission.availability === 'expo-go'
+                    ? 'Expo Go bildirimleri desteklemiyor: expo-notifications, SDK 53 ile ' +
+                      'Expo Go’dan çıkarıldı. Hatırlatıcılar burada kurulmuyor — ' +
+                      'denemek için development build gerekiyor. Uygulamanın geri ' +
+                      'kalanı normal çalışır.'
+                    : 'Bildirimler yalnızca iOS ve Android’de çalışıyor. Web sürümünde ' +
+                      'hatırlatıcı kurulmuyor.'}
                 </Text>
               </View>
             ) : permission && !permission.granted ? (
