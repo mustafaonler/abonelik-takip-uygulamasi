@@ -82,7 +82,20 @@ export default function LoginScreen() {
       }
 
       // ── Native (iOS / Android) — PKCE ──────────────────────────────
+      //
+      // DİKKAT: `scheme` yalnızca Standalone/Bare build'lerde dikkate alınır
+      // (expo-auth-session/build/AuthSession.js, makeRedirectUri). Expo Go'da
+      // Linking.createURL özel şemayı yok sayıp geliştirme sunucusuna işaret
+      // eden bir exp:// adresi üretir:
+      //   Expo Go          → exp://<lan-ip>:8081/--/auth/callback
+      //   Development build → subtrack://auth/callback
+      //
+      // Bu adresin Supabase → Authentication → URL Configuration → Redirect
+      // URLs listesinde OLMASI gerekiyor. Yoksa Supabase Site URL'e düşer;
+      // Site URL localhost ise telefonun tarayıcısı kendi localhost'unu açmaya
+      // çalışıp "bu siteye ulaşılamıyor" verir.
       const redirectTo = makeRedirectUri({ scheme: 'subtrack', path: 'auth/callback' });
+      console.log('[OAuth] redirectTo (bu adres Supabase Redirect URLs listesinde olmalı):', redirectTo);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
