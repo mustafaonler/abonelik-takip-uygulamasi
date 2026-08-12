@@ -1,0 +1,29 @@
+{
+  "cli": {
+    "version": ">= 5.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "//": "APK: telefona doğrudan kurulabilir. AAB yalnızca Play Store'a yüklenir, elle kurulamaz.",
+        "buildType": "apk"
+      },
+      "env": {
+        "//": "EXPO_PUBLIC_* değişkenleri bundle'a gömülür. .env gitignore'da olduğu için bulut derlemesine gitmez; bu ikisini EAS'a ayrıca tanıtmak gerekir (aşağıdaki nota bak)."
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" }
+    },
+    "production": {
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
